@@ -104,12 +104,27 @@ export interface AddSourceDocumentInput {
   content: string;
 }
 
+/**
+ * AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. "mock" always uses deterministic mock output.
+ */
+export type CreateExtractionInputProvider =
+  (typeof CreateExtractionInputProvider)[keyof typeof CreateExtractionInputProvider];
+
+export const CreateExtractionInputProvider = {
+  mock: "mock",
+  openai: "openai",
+  gemini: "gemini",
+  auto: "auto",
+} as const;
+
 export interface CreateExtractionInput {
   /**
    * Optional — if omitted, uses the most recent source document for the project.
    * @nullable
    */
   sourceDocumentId?: number | null;
+  /** AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. "mock" always uses deterministic mock output. */
+  provider?: CreateExtractionInputProvider;
 }
 
 export interface Equation {

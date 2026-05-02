@@ -1,30 +1,41 @@
 // Extraction engine.
 //
 // Provider abstraction:
-//   Today only the deterministic `MockProvider` exists. Real providers
-//   (OpenAI, Gemini) will implement the same `ExtractionProvider` interface
-//   and be selected at runtime by `getActiveProvider()` based on env vars.
-//   Never hardcode keys.
+//   Three providers are supported: MockProvider (deterministic, always available),
+//   OpenAIProvider (requires OPENAI_API_KEY), and GeminiProvider (requires
+//   GEMINI_API_KEY). The active provider is selected by getActiveProvider()
+//   based on the caller's preference and which API keys are present in the
+//   environment. Keys are NEVER hardcoded.
+//
+// Provider priority (getActiveProvider):
+//   1. If the caller requests a specific named provider AND its key exists → use it.
+//   2. If the caller requests "mock" → always use MockProvider (no key needed).
+//   3. Otherwise (auto or requested key not available) → OpenAI → Gemini → Mock.
 //
 // Validation contract:
-//   `runExtraction()` is the single public entry point. It validates the
-//   input text, calls the active provider, and re-validates the provider's
-//   output against `ExtractionResultSchema`. Callers receive either a fully
-//   validated `ExtractionResult` or one of two typed errors.
+//   runExtraction() is the single public entry point. It validates input,
+//   calls the active provider, attempts one JSON repair pass on malformed
+//   responses, and re-validates against ExtractionResultSchema. Callers
+//   receive either a fully validated ExtractionResult or a typed error.
+//   Bad data is NEVER saved to the database.
+//
+// Token / cost metadata:
+//   Logged at info level when the provider supplies it. Never throws if
+//   metadata is absent.
 //
 // Database mapping:
-//   `mapExtractionToDb()` is a pure function that converts an
-//   `ExtractionResult` into the row shapes the routes layer inserts. The
-//   richer fields that don't have a column (e.g. equation confidence,
-//   per-assumption confidence, model_card.inputs/outputs) are folded into
-//   adjacent text fields where useful and otherwise dropped — without
-//   changing the DB schema.
+//   mapExtractionToDb() converts an ExtractionResult into the row shapes
+//   the routes layer inserts. Richer fields without DB columns are folded
+//   into adjacent text fields. The DB schema is never changed here.
 
 import {
   ExtractionResultSchema,
   type ExtractionResult,
   type ExtractedModelCardMeta,
 } from "./extraction-schema";
+import { OpenAIProvider } from "./providers/openai-provider";
+import { GeminiProvider } from "./providers/gemini-provider";
+import { logger } from "./logger";
 
 // ---------- Public errors ----------
 
@@ -52,13 +63,17 @@ export class ExtractionProviderError extends Error {
 // ---------- Provider interface ----------
 
 export type ProviderName = "mock" | "openai" | "gemini";
+export type ProviderPreference = ProviderName | "auto";
 
 export interface ExtractionProvider {
   readonly name: ProviderName;
   /**
-   * Producer of an extraction. Implementations may return any shape; the
-   * orchestrator re-validates against `ExtractionResultSchema` so providers
-   * never bypass validation.
+   * Producer of an extraction result. May return any shape — the orchestrator
+   * always re-validates against ExtractionResultSchema, so providers never
+   * bypass validation.
+   *
+   * Real providers return `{ raw: unknown; tokenMeta: object | null }`.
+   * MockProvider returns an ExtractionResult directly (no token metadata).
    */
   extract(sourceText: string): Promise<unknown>;
 }
@@ -148,7 +163,7 @@ class MockProvider implements ExtractionProvider {
       limitations: [
         {
           limitation:
-            "Mock extraction — configure OPENAI_API_KEY or GEMINI_API_KEY for real results in a future milestone.",
+            "Mock extraction — configure OPENAI_API_KEY or GEMINI_API_KEY to use a real AI provider.",
           source_context: "(mock)",
           confidence: "high",
         },
@@ -169,16 +184,79 @@ class MockProvider implements ExtractionProvider {
   }
 }
 
+// ---------- JSON repair ----------
+
+/**
+ * Attempt to extract a valid JSON object from a raw string that may contain
+ * markdown fences, preamble text, or minor syntax errors.
+ *
+ * Returns the parsed value, or null if all repair strategies fail.
+ */
+function tryRepairJson(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+
+  // 1. Direct parse (already succeeded in provider if raw is an object, but
+  //    guard here for string responses that slipped through).
+  try {
+    return JSON.parse(raw);
+  } catch {
+    /* fall through */
+  }
+
+  // 2. Strip markdown code fences: ```json ... ``` or ``` ... ```
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch?.[1]) {
+    try {
+      return JSON.parse(fenceMatch[1]);
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // 3. Slice from first `{` to last `}` — handles leading/trailing prose.
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+    } catch {
+      /* fall through */
+    }
+  }
+
+  return null;
+}
+
 // ---------- Provider factory ----------
 
 /**
- * Select the active extraction provider. Today: always mock. Future
- * milestones will inspect env vars (never hardcoded keys) and instantiate
- * an OpenAI or Gemini provider when configured.
+ * Select the active extraction provider.
+ *
+ * Priority rules (see module header for full description):
+ *  - "mock"   → always MockProvider
+ *  - "openai" → OpenAIProvider if OPENAI_API_KEY present, else auto-fallback
+ *  - "gemini" → GeminiProvider if GEMINI_API_KEY present, else auto-fallback
+ *  - "auto" / undefined → OpenAI → Gemini → Mock
  */
-export function getActiveProvider(): ExtractionProvider {
-  // if (process.env["OPENAI_API_KEY"]) return new OpenAIProvider();
-  // if (process.env["GEMINI_API_KEY"]) return new GeminiProvider();
+export function getActiveProvider(
+  preferred?: ProviderPreference,
+): ExtractionProvider {
+  const hasOpenAI = !!process.env["OPENAI_API_KEY"];
+  const hasGemini = !!process.env["GEMINI_API_KEY"];
+
+  if (preferred === "mock") {
+    return new MockProvider();
+  }
+  if (preferred === "openai" && hasOpenAI) {
+    return new OpenAIProvider();
+  }
+  if (preferred === "gemini" && hasGemini) {
+    return new GeminiProvider();
+  }
+
+  // Auto fallback chain (also used when preferred key is not configured)
+  if (hasOpenAI) return new OpenAIProvider();
+  if (hasGemini) return new GeminiProvider();
   return new MockProvider();
 }
 
@@ -186,7 +264,10 @@ export function getActiveProvider(): ExtractionProvider {
 
 export const MIN_SOURCE_CHARS = 30;
 
-export async function runExtraction(sourceText: string): Promise<{
+export async function runExtraction(
+  sourceText: string,
+  preferred?: ProviderPreference,
+): Promise<{
   result: ExtractionResult;
   providerName: ProviderName;
 }> {
@@ -200,11 +281,12 @@ export async function runExtraction(sourceText: string): Promise<{
     );
   }
 
-  const provider = getActiveProvider();
+  const provider = getActiveProvider(preferred);
 
-  let raw: unknown;
+  // Call the provider, catching any thrown error.
+  let providerOutput: unknown;
   try {
-    raw = await provider.extract(trimmed);
+    providerOutput = await provider.extract(trimmed);
   } catch (err) {
     throw new ExtractionProviderError(
       `Provider threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -212,7 +294,50 @@ export async function runExtraction(sourceText: string): Promise<{
     );
   }
 
-  const parsed = ExtractionResultSchema.safeParse(raw);
+  // Real providers return { raw, tokenMeta }; MockProvider returns the result
+  // directly. Normalise to a single `candidate` value.
+  let candidate: unknown;
+  let tokenMeta: Record<string, unknown> | null = null;
+
+  if (
+    providerOutput !== null &&
+    typeof providerOutput === "object" &&
+    "raw" in providerOutput &&
+    "tokenMeta" in providerOutput
+  ) {
+    const typed = providerOutput as { raw: unknown; tokenMeta: unknown };
+    candidate = typed.raw;
+    tokenMeta =
+      typed.tokenMeta && typeof typed.tokenMeta === "object"
+        ? (typed.tokenMeta as Record<string, unknown>)
+        : null;
+  } else {
+    candidate = providerOutput;
+  }
+
+  // Log token / cost metadata when present. Never throw if absent.
+  if (tokenMeta) {
+    logger.info(
+      { provider: provider.name, tokenMeta },
+      "Provider token usage",
+    );
+  }
+
+  // First validation attempt.
+  let parsed = ExtractionResultSchema.safeParse(candidate);
+
+  // If validation failed, attempt one JSON repair pass.
+  if (!parsed.success) {
+    const repaired = tryRepairJson(candidate);
+    if (repaired !== null && repaired !== candidate) {
+      logger.warn(
+        { provider: provider.name },
+        "First parse failed — attempting JSON repair pass",
+      );
+      parsed = ExtractionResultSchema.safeParse(repaired);
+    }
+  }
+
   if (!parsed.success) {
     throw new ExtractionProviderError(
       `Provider returned malformed extraction JSON: ${parsed.error.message}`,
@@ -289,7 +414,6 @@ function parseNumeric(value: string): { num: number; ok: boolean } {
 /** Reduce the rich provider-side role enum to the simplified DB enum. */
 function downgradeRole(role: string): "state" | "input" | "output" {
   if (role === "state" || role === "input" || role === "output") return role;
-  // "parameter" and "control" map to "input" for storage.
   return "input";
 }
 
@@ -428,8 +552,6 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
       symbol: p.symbol,
       value: num,
       unit: p.unit,
-      // If we couldn't parse the value, downgrade confidence so the UI
-      // surfaces the uncertainty regardless of what the provider claimed.
       confidence: ok ? p.confidence : "low",
       sourceQuote:
         (p.name ? `${p.name}. ` : "") +

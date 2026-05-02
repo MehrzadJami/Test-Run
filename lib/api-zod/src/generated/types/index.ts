@@ -12,6 +12,7 @@ export * from "./apiError";
 export * from "./assumption";
 export * from "./assumptionKind";
 export * from "./createExtractionInput";
+export * from "./createExtractionInputProvider";
 export * from "./createProjectInput";
 export * from "./equation";
 export * from "./extractionSummary";

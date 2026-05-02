@@ -5,6 +5,7 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+import type { CreateExtractionInputProvider } from "./createExtractionInputProvider";
 
 export interface CreateExtractionInput {
   /**
@@ -12,4 +13,6 @@ export interface CreateExtractionInput {
    * @nullable
    */
   sourceDocumentId?: number | null;
+  /** AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. "mock" always uses deterministic mock output. */
+  provider?: CreateExtractionInputProvider;
 }

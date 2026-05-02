@@ -124,6 +124,12 @@ export const CreateExtractionBody = zod.object({
     .describe(
       "Optional — if omitted, uses the most recent source document for the project.",
     ),
+  provider: zod
+    .enum(["mock", "openai", "gemini", "auto"])
+    .optional()
+    .describe(
+      'AI provider to use for extraction. \"auto\" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. \"mock\" always uses deterministic mock output.',
+    ),
 });
 
 /**

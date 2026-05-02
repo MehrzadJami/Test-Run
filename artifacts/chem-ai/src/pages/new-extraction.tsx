@@ -28,12 +28,53 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   UploadCloud,
   FileText,
   Loader2,
   FlaskConical,
   Microscope,
+  TriangleAlert,
+  Zap,
+  Bot,
 } from "lucide-react";
+
+// ─── Provider config ──────────────────────────────────────────────────────────
+
+type ProviderChoice = "auto" | "mock" | "openai" | "gemini";
+
+const PROVIDER_OPTIONS: {
+  value: ProviderChoice;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "auto",
+    label: "Auto",
+    description: "OpenAI → Gemini → Mock (uses best available key)",
+  },
+  {
+    value: "openai",
+    label: "OpenAI (GPT-4o)",
+    description: "Requires OPENAI_API_KEY",
+  },
+  {
+    value: "gemini",
+    label: "Gemini 1.5 Flash",
+    description: "Requires GEMINI_API_KEY",
+  },
+  {
+    value: "mock",
+    label: "Mock (demo)",
+    description: "Deterministic demo output — no API key needed",
+  },
+];
 
 // ─── Demo source texts ────────────────────────────────────────────────────────
 
@@ -150,6 +191,8 @@ export default function NewExtraction() {
     name: string;
     content: string;
   } | null>(null);
+  const [selectedProvider, setSelectedProvider] =
+    useState<ProviderChoice>("auto");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const createProject = useCreateProject();
@@ -160,6 +203,11 @@ export default function NewExtraction() {
     createProject.isPending ||
     addSource.isPending ||
     createExtraction.isPending;
+
+  const isRealProvider =
+    selectedProvider === "openai" ||
+    selectedProvider === "gemini" ||
+    selectedProvider === "auto";
 
   function loadDemo(type: "chemostat" | "bioreactor") {
     const demo = type === "chemostat" ? DEMO_CHEMOSTAT : DEMO_BIOREACTOR;
@@ -237,7 +285,7 @@ export default function NewExtraction() {
 
       await createExtraction.mutateAsync({
         projectId: project.id,
-        data: {},
+        data: { provider: selectedProvider },
       });
 
       await queryClient.invalidateQueries({
@@ -277,6 +325,22 @@ export default function NewExtraction() {
         </p>
       </div>
 
+      {/* ── Verification warning ── */}
+      <div className="flex gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+        <TriangleAlert className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+            Manual verification required
+          </p>
+          <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+            AI-extracted equations, parameters, units, and assumptions{" "}
+            <strong>must be manually verified</strong> against the original
+            source before use in simulation, design, or publication. AI models
+            can hallucinate values, misread notation, or omit constraints.
+          </p>
+        </div>
+      </div>
+
       {/* ── Demo workflow ── */}
       <div className="rounded-xl border border-primary/20 bg-primary/5 p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -287,13 +351,13 @@ export default function NewExtraction() {
             </h2>
           </div>
           <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
-            MockProvider — deterministic output
+            Works with any provider
           </Badge>
         </div>
         <p className="text-xs text-muted-foreground leading-relaxed">
           Pre-fills the paste tab with a realistic methodology excerpt from
-          chemical engineering literature. Extraction uses MockProvider — the
-          result is demo data, not real AI output.
+          chemical engineering literature. Select a provider below, then click
+          Extract Model.
         </p>
         <div className="flex gap-2 flex-wrap">
           <Button
@@ -424,15 +488,72 @@ export default function NewExtraction() {
             <CardHeader>
               <CardTitle>Extraction Settings</CardTitle>
               <CardDescription>
-                Provider:{" "}
-                <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">
-                  mock
-                </code>{" "}
-                — returns deterministic demo data. Real AI providers (OpenAI,
-                Gemini) ship in a future milestone.
+                Configure the AI provider and project name.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-5">
+
+              {/* Provider selector */}
+              <div className="space-y-2">
+                <Label htmlFor="provider-select" className="text-sm font-medium flex items-center gap-1.5">
+                  <Bot className="h-3.5 w-3.5" />
+                  AI Provider
+                </Label>
+                <Select
+                  value={selectedProvider}
+                  onValueChange={(v) =>
+                    setSelectedProvider(v as ProviderChoice)
+                  }
+                >
+                  <SelectTrigger
+                    id="provider-select"
+                    data-testid="select-provider"
+                    className="w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROVIDER_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        <div className="flex flex-col py-0.5">
+                          <span className="font-medium">{opt.label}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {opt.description}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {/* Provider status badge */}
+                {selectedProvider === "mock" && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
+                    Demo mode — deterministic output, no API key needed.
+                  </p>
+                )}
+                {selectedProvider === "auto" && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Zap className="h-3 w-3" />
+                    Uses the best available key: OpenAI → Gemini → Mock.
+                  </p>
+                )}
+                {selectedProvider === "openai" && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+                    Falls back to auto-chain if OPENAI_API_KEY is not set.
+                  </p>
+                )}
+                {selectedProvider === "gemini" && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-purple-500" />
+                    Falls back to auto-chain if GEMINI_API_KEY is not set.
+                  </p>
+                )}
+              </div>
+
+              {/* Project title */}
               <div className="space-y-2">
                 <Label htmlFor="title" className="text-sm font-medium">
                   Project title{" "}
@@ -463,13 +584,20 @@ export default function NewExtraction() {
                 {isBusy ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Extracting…
+                    {isRealProvider
+                      ? "Extracting with AI…"
+                      : "Extracting…"}
                   </>
                 ) : (
                   "Extract Model"
                 )}
               </Button>
-              {isBusy && (
+              {isBusy && isRealProvider && (
+                <p className="text-xs text-center text-muted-foreground animate-pulse">
+                  Calling AI provider — this may take 10–30 seconds…
+                </p>
+              )}
+              {isBusy && !isRealProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
                   Creating project and running extraction…
                 </p>

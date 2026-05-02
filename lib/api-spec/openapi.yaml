@@ -344,6 +344,13 @@ components:
         sourceDocumentId:
           type: ["integer", "null"]
           description: Optional — if omitted, uses the most recent source document for the project.
+        provider:
+          type: string
+          enum: [mock, openai, gemini, auto]
+          description: >-
+            AI provider to use for extraction. "auto" (default) uses the
+            fallback chain: OpenAI → Gemini → Mock depending on which keys
+            are configured. "mock" always uses deterministic mock output.
 
     Equation:
       type: object

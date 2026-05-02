@@ -274,10 +274,14 @@ router.post(
     }
 
     // 1. Run the extraction (input validated, provider output re-validated
-    //    by Zod inside runExtraction).
+    //    by Zod inside runExtraction). Pass the caller's preferred provider
+    //    (or undefined to use the auto fallback chain).
     let extracted;
     try {
-      extracted = await runExtraction(source.content);
+      extracted = await runExtraction(
+        source.content,
+        body.data.provider ?? undefined,
+      );
     } catch (err) {
       if (err instanceof ExtractionInputError) {
         res.status(err.status).json({ error: err.message });
