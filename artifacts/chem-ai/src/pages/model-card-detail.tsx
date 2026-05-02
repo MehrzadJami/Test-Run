@@ -11,6 +11,8 @@ import {
 import { useAuth } from "@workspace/replit-auth-web";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
@@ -58,6 +60,7 @@ import {
   type FormalEqResult,
 } from "@/lib/dimensional-analysis";
 import { generatePythonOdeTemplate } from "@/lib/python-generator";
+import { generateJupyterNotebook } from "@/lib/notebook-generator";
 import { matchTemplates, type TemplateScanResult, type RunnableTemplateStatus } from "@/lib/template-matcher";
 import { generateModelPackage } from "@/lib/package-generator";
 import { VariablesTab } from "@/components/model-card/VariablesTab";
@@ -134,6 +137,30 @@ type RawExtraction = {
   assumptions?: RawAssumption[];
   limitations?: RawLimitation[];
   model_card?: RawModelCard;
+};
+
+type ReviewStatus =
+  | "extracted"
+  | "needs_review"
+  | "reviewed"
+  | "verified"
+  | "rejected";
+
+type LocalReviewData = {
+  status: ReviewStatus;
+  reviewer_name?: string;
+  review_notes: string;
+  reviewed_at?: string;
+  verification_status?: string;
+  issues_found: string[];
+  checklist: {
+    equations_checked: boolean;
+    units_checked: boolean;
+    parameters_checked: boolean;
+    initial_conditions_checked: boolean;
+    assumptions_checked: boolean;
+    code_scaffold_checked: boolean;
+  };
 };
 
 // ─── Small shared display components ─────────────────────────────────────────
@@ -500,6 +527,9 @@ function ModelCardDetailInner({
 
   // ── Model Package download (M9) ─────────────────────────────────────────
   const [downloading, setDownloading] = useState(false);
+  const [reviewData, setReviewData] = useState<LocalReviewData>(() =>
+    loadLocalReview(projectId),
+  );
 
   async function handleDownloadPackage() {
     setDownloading(true);
@@ -521,6 +551,7 @@ function ModelCardDetailInner({
         report,
         unitReport,
         pythonCode,
+        review: reviewData,
       });
 
       const JSZip = (await import("jszip")).default;
@@ -578,6 +609,9 @@ function ModelCardDetailInner({
             className="text-[10px] uppercase"
           >
             {extraction.status}
+          </Badge>
+          <Badge variant="outline" className="text-[10px] uppercase border-blue-400 text-blue-700">
+            Review: {reviewData.status.replace("_", " ")}
           </Badge>
           {/* Reproducibility score badge in header */}
           <Badge
@@ -711,6 +745,34 @@ function ModelCardDetailInner({
                 : <Package className="h-4 w-4 mr-2" />}
               {downloading ? "Building…" : "Download Package"}
             </Button>
+            <Button
+              variant="outline"
+              onClick={() =>
+                downloadTextFile(
+                  generateJupyterNotebook({
+                    title: extraction.modelCardTitle,
+                    projectName: project?.name ?? "Unknown project",
+                    providerUsed: extraction.providerUsed,
+                    systemType: raw?.system_type ?? extraction.domain,
+                    systemDescription: extraction.systemDescription,
+                    equations,
+                    variables,
+                    parameters,
+                    assumptions: [...assumptionItems, ...limitationItems],
+                    raw: raw ?? null,
+                    report,
+                    unitReport,
+                    pythonCode,
+                  }),
+                  "model_notebook.ipynb",
+                  "application/x-ipynb+json",
+                )
+              }
+              data-testid="btn-download-notebook"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download Jupyter Notebook
+            </Button>
             <a
               href={`${import.meta.env.BASE_URL}api/projects/${projectId}/export`}
               target="_blank"
@@ -765,6 +827,9 @@ function ModelCardDetailInner({
           </TabsTrigger>
           <TabsTrigger value="audit" data-testid="tab-audit">
             Audit Trail
+          </TabsTrigger>
+          <TabsTrigger value="review" data-testid="tab-review">
+            Review
           </TabsTrigger>
           <TabsTrigger value="raw" data-testid="tab-raw">
             Raw JSON
@@ -1684,6 +1749,104 @@ function ModelCardDetailInner({
           <AuditTrailTab extraction={extraction} />
         </TabsContent>
 
+        <TabsContent value="review" className="mt-6 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Model Review Workflow (M26)</CardTitle>
+              <CardDescription>
+                Verified means manually checked by the user against the provided source, not experimentally validated.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Input
+                placeholder="Reviewer name (optional)"
+                value={reviewData.reviewer_name ?? ""}
+                onChange={(e) =>
+                  setAndPersistReview(projectId, setReviewData, {
+                    ...reviewData,
+                    reviewer_name: e.target.value,
+                  })
+                }
+              />
+              <Textarea
+                placeholder="Review notes"
+                value={reviewData.review_notes}
+                onChange={(e) =>
+                  setAndPersistReview(projectId, setReviewData, {
+                    ...reviewData,
+                    review_notes: e.target.value,
+                  })
+                }
+              />
+              <div className="grid md:grid-cols-2 gap-2 text-sm">
+                {(
+                  [
+                    ["equations_checked", "Equations checked against source"],
+                    ["units_checked", "Units checked"],
+                    ["parameters_checked", "Parameters checked"],
+                    ["initial_conditions_checked", "Initial conditions checked"],
+                    ["assumptions_checked", "Assumptions checked"],
+                    ["code_scaffold_checked", "Code scaffold checked"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={reviewData.checklist[key]}
+                      onChange={(e) =>
+                        setAndPersistReview(projectId, setReviewData, {
+                          ...reviewData,
+                          checklist: { ...reviewData.checklist, [key]: e.target.checked },
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    setAndPersistReview(projectId, setReviewData, {
+                      ...reviewData,
+                      status: "needs_review",
+                      reviewed_at: new Date().toISOString(),
+                    })
+                  }
+                >
+                  Mark as Needs Review
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    setAndPersistReview(projectId, setReviewData, {
+                      ...reviewData,
+                      status: "reviewed",
+                      reviewed_at: new Date().toISOString(),
+                    })
+                  }
+                >
+                  Mark as Reviewed
+                </Button>
+                <Button
+                  onClick={() =>
+                    setAndPersistReview(projectId, setReviewData, {
+                      ...reviewData,
+                      status: "verified",
+                      verification_status:
+                        "Verified means manually checked by the user against the provided source, not experimentally validated.",
+                      reviewed_at: new Date().toISOString(),
+                    })
+                  }
+                >
+                  Mark as Verified
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         {/* ── Raw JSON ── */}
         <TabsContent value="raw" className="mt-6">
           <Card>
@@ -1717,9 +1880,54 @@ function ModelCardDetailInner({
   );
 }
 
+function reviewStorageKey(projectId: string | number): string {
+  return `chemai_review_${projectId}`;
+}
+
+function defaultReview(): LocalReviewData {
+  return {
+    status: "extracted",
+    review_notes: "",
+    verification_status: "",
+    issues_found: [],
+    checklist: {
+      equations_checked: false,
+      units_checked: false,
+      parameters_checked: false,
+      initial_conditions_checked: false,
+      assumptions_checked: false,
+      code_scaffold_checked: false,
+    },
+  };
+}
+
+function loadLocalReview(projectId: string | number): LocalReviewData {
+  try {
+    const raw = localStorage.getItem(reviewStorageKey(projectId));
+    if (!raw) return defaultReview();
+    return { ...defaultReview(), ...JSON.parse(raw) } as LocalReviewData;
+  } catch {
+    return defaultReview();
+  }
+}
+
+function setAndPersistReview(
+  projectId: string,
+  projectId: string | number,
+  setState: (next: LocalReviewData) => void,
+  next: LocalReviewData,
+): void {
+  const issues = Object.entries(next.checklist)
+    .filter(([, v]) => !v)
+    .map(([k]) => k.replaceAll("_", " "));
+  const withIssues = { ...next, issues_found: issues };
+  setState(withIssues);
+  localStorage.setItem(reviewStorageKey(projectId), JSON.stringify(withIssues));
+}
+
 /** Trigger a browser download of a text file. */
-function downloadTextFile(content: string, filename: string): void {
-  const blob = new Blob([content], { type: "text/x-python" });
+function downloadTextFile(content: string, filename: string, mimeType = "text/plain"): void {
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

@@ -109,7 +109,8 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Download simulation output as CSV
 
 **Exports**
-- Model Package ZIP (14 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `requirements.txt`, `source_excerpt.txt`
+- Model Package ZIP (15 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `model_notebook.ipynb`, `requirements.txt`, `source_excerpt.txt`
+- Jupyter Notebook export (`model_notebook.ipynb`) from each model card, including summary, tables, equations, missing info, reproducibility/unit checks, and simulation scaffold cells
 - Python ODE template (`simulate.py`): parameters pre-filled, equation bodies marked TODO, readiness banners included
 - Simulation CSV: time-series (t, X, S) from the browser RK4 solver
 
