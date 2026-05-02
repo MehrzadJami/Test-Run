@@ -61,6 +61,7 @@ import {
 } from "@/lib/dimensional-analysis";
 import { generatePythonOdeTemplate } from "@/lib/python-generator";
 import { generateJupyterNotebook } from "@/lib/notebook-generator";
+import { buildAggregatedModelCard, detectConflicts } from "@/lib/multi-source";
 import { matchTemplates, type TemplateScanResult, type RunnableTemplateStatus } from "@/lib/template-matcher";
 import { generateModelPackage } from "@/lib/package-generator";
 import { VariablesTab } from "@/components/model-card/VariablesTab";
@@ -527,8 +528,22 @@ function ModelCardDetailInner({
 
   // ── Model Package download (M9) ─────────────────────────────────────────
   const [downloading, setDownloading] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [reviewData, setReviewData] = useState<LocalReviewData>(() =>
     loadLocalReview(projectId),
+  );
+  const projectExtractions = ((project as any)?.extractions ?? []) as any[];
+  const filteredExtractions =
+    sourceFilter === "all"
+      ? projectExtractions
+      : projectExtractions.filter((e) => String(e.id) === sourceFilter);
+  const aggregated = useMemo(
+    () => buildAggregatedModelCard(filteredExtractions),
+    [filteredExtractions],
+  );
+  const conflicts = useMemo(
+    () => detectConflicts(filteredExtractions),
+    [filteredExtractions],
   );
 
   async function handleDownloadPackage() {
@@ -830,6 +845,15 @@ function ModelCardDetailInner({
           </TabsTrigger>
           <TabsTrigger value="review" data-testid="tab-review">
             Review
+          </TabsTrigger>
+          <TabsTrigger value="sources" data-testid="tab-sources">
+            Sources
+          </TabsTrigger>
+          <TabsTrigger value="aggregated" data-testid="tab-aggregated">
+            Aggregated
+          </TabsTrigger>
+          <TabsTrigger value="conflicts" data-testid="tab-conflicts">
+            Conflicts
           </TabsTrigger>
           <TabsTrigger value="raw" data-testid="tab-raw">
             Raw JSON
@@ -1843,6 +1867,84 @@ function ModelCardDetailInner({
                   Mark as Verified
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="sources" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Project Sources</CardTitle>
+              <CardDescription>All source documents and extraction history for this project.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                {(((project as any)?.sourceDocuments ?? []) as any[]).map((s) => (
+                  <div key={s.id} className="rounded border p-3 text-sm">
+                    <div><strong>{s.filename || `Source ${s.id}`}</strong> · {s.kind}</div>
+                    <div className="text-muted-foreground">
+                      {new Date(s.createdAt).toLocaleString()} · {String(s.content ?? "").length} chars
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Extractions</p>
+                {projectExtractions.map((e) => (
+                  <div key={e.id} className="rounded border p-3 text-sm flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-medium">{e.modelCardTitle || `Extraction ${e.id}`}</div>
+                      <div className="text-muted-foreground">{e.providerUsed} · {e.status} · {new Date(e.createdAt).toLocaleString()}</div>
+                    </div>
+                    <Link href={`/model-cards/${e.projectId}`}>
+                      <Button variant="outline" size="sm">Open model card</Button>
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="aggregated" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Aggregated Model Card</CardTitle>
+              <CardDescription>Merged across selected extractions in this project.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <select className="border rounded px-2 py-1 text-sm" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+                <option value="all">All extractions</option>
+                {projectExtractions.map((e) => (
+                  <option key={e.id} value={String(e.id)}>{e.modelCardTitle || `Extraction ${e.id}`}</option>
+                ))}
+              </select>
+              <div className="text-sm">Variables merged: {aggregated.variables.length}</div>
+              <div className="text-sm">Parameters merged: {aggregated.parameters.length}</div>
+              <div className="text-sm">Equations merged: {aggregated.equations.length}</div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="conflicts" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Conflict Detection</CardTitle>
+              <CardDescription>Symbol/unit/value-based conflicts across selected sources.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {conflicts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No conflicts detected.</p>
+              ) : (
+                conflicts.map((c, i) => (
+                  <div key={`${c.type}-${c.symbol_or_label}-${i}`} className="rounded border p-3 text-sm">
+                    <div className="font-medium">{c.type} · {c.symbol_or_label} · {c.severity}</div>
+                    <div>{c.details}</div>
+                    <div className="text-muted-foreground">Sources: {c.sources.join(", ")}</div>
+                    <div className="text-muted-foreground">Recommendation: {c.recommendation}</div>
+                  </div>
+                ))
+              )}
             </CardContent>
           </Card>
         </TabsContent>
