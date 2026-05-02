@@ -1,7 +1,7 @@
 # ChemAI Model Compiler — Project Kanban
 
 > Living document. Move cards between columns as work progresses.
-> Source: https://github.com/MehrzadJami/Serious-Tracker
+> Source: https://github.com/MehrzadJami/Test-Run
 
 ---
 
@@ -9,221 +9,252 @@
 
 ### M1 — Full-stack Scaffold
 - Express 5 API + Vite React + TypeScript throughout
-- PostgreSQL database + Drizzle ORM schema
+- PostgreSQL + Drizzle ORM — schema-first, strongly typed
 - pnpm monorepo: `api-server` (/api) · `chem-ai` (/) · `mockup-sandbox` (/__mockup)
+- OpenAPI spec in `lib/api-spec/openapi.yaml` → Orval codegen → React Query hooks + Zod schemas
+- Pino structured logging (`req.log` in routes, singleton `logger` elsewhere)
+- Path-based reverse proxy at `localhost:80` — no direct port access needed
 - Sidebar navigation: Dashboard · New Extraction · Model Cards · Simulation · Exports
-- Demo seed data auto-loads on first boot (chemostat / Andrews 1968)
 
 ### M2 — AI Extraction Engine
 - `ExtractionProvider` interface — swap providers without changing call sites
-- `MockProvider` — deterministic fixture for development and testing
-- `runExtraction()` entry point with Zod input + output validation
-- `mapExtractionToDb()` pure mapper from provider result → DB row shapes
-- Future-ready: picks OpenAI / Gemini automatically when env vars are present
+- `MockProvider` — deterministic fixture for development; always active until M13
+- `ExtractionResultSchema` — Zod validation on all provider responses
+- `runExtraction()` entry point with full input + output validation
+- `mapExtractionToDb()` — pure mapper from provider result → DB row shapes
+- `getActiveProvider()` factory ready: picks OpenAI/Gemini automatically when env vars are set
+- `rawExtractionJson` (JSONB) — full validated payload stored for traceability
 
-### DB Schema & Seeding
+### M3 — Database Schema & Seeding
 - `projects → source_documents → extractions → { equations, variables, parameters, assumptions }`
 - `assumptions.kind` enum: `assumption | limitation`
-- `extractions.raw_extraction_json` (JSONB) preserves full validated payload
 - Cascade deletes on all child tables
-- Seed: chemostat demo scores 100/100 reproducibility, 0H/5M unit check
+- Auto-seed on first boot: chemostat demo (Andrews 1968) — 100/100 reproducibility, 0H/5M unit check
+- Seed is idempotent — safe to run on every server startup
+- Standalone seed script: `pnpm --filter @workspace/db run seed`
 
 ### M4 — Branding & Landing Page
-- Project name: **ChemAI Model Compiler**
-- "NOT A NOTEBOOKLM CLONE" differentiation section
-- "NOT A BLACK-BOX OPTIMIZER" section
-- Professional hero with flask icon and teal brand color
+- Product name: **ChemAI Model Compiler** — consistent in all files
+- Hero section: teal "Simulation-Ready" highlight, flask icon, "View Demo Model" CTA
+- "NOT A NOTEBOOKLM CLONE" — side-by-side capability comparison card
+- "NOT A BLACK-BOX OPTIMIZER" — honest scope differentiation section
+- Core workflow 3-step card row: Ingest → Extract → Simulate & Export
+- Example output stat tiles: repro score · 14-file package · Python scaffold · unit check
+- Amber scientific accuracy callout (required disclaimer, honest wording)
+- No exaggerated claims ("digital twin", "guaranteed optimization" absent throughout)
 
-### Model Card — 10-Tab View
+### M5 — Model Card — 10-Tab View
 - **Overview** — system description, problem statement, model card summary (inputs/outputs/controls)
-- **Variables (N)** — state variables table with symbol, role, unit, source quote, confidence
-- **Parameters (N)** — parameters table with symbol, value, unit, source quote, confidence
+- **Variables (N)** — state variables with symbol, role, unit, source quote, confidence badge
+- **Parameters (N)** — parameters with symbol, value, unit, confidence badge, source quote
 - **Equations (N)** — equation list with LaTeX rendering, symbol inventory, source quotes
-- **Assumptions (N)** — assumptions and limitations
-- **Missing Info** — critical/warning/info missing items detected automatically
-- **ODE Template** — generated Python code viewer + download (see M8)
-- **Reproducibility** — score breakdown (see M6)
-- **Unit Check** — heuristic unit analysis (see M7)
+- **Assumptions (N)** — assumptions and limitations in separate sub-sections
+- **Missing Info** — critical/warning/info severity items with source context
+- **ODE Template** — generated Python code viewer + copy + download (M8)
+- **Reproducibility** — score breakdown with per-dimension bars (M6)
+- **Unit Check** — heuristic check-by-check results (M7)
 - **Raw JSON** — full extraction payload for debugging
-- Header badges: system type · MOCK tag · readiness badge · Repro score · Unit check status
-- "Run Simulation" and "Export JSON" buttons in header
+- Header badges: system type · MOCK provider tag · readiness badge · repro score · unit check status
+- Header actions: "Run Simulation" · "Export JSON" · "Download Package"
 
-### M5 — Simulation Playground
-- Pure in-browser RK4 ODE solver (no server, no arbitrary code execution)
-- Monod chemostat model: μ = μmax·S/(Ks+S), dX/dt = (μ−D)·X, dS/dt = D·(Sin−S) − (μ/Yxs)·X
-- Capped at 50,000 steps, decimated to ≤1,000 plot points
-- Recharts `LineChart` with teal/orange X and S traces
-- Dashed reference lines at analytical steady-state
-- Full parameter panel (μmax, Ks, D, Sin, Yxs, X0, S0, tFinal, dt)
-- "Download CSV" export with metadata header
-
-### M6 — Reproducibility Engine
-- Pure client-side, no server/AI call (`src/lib/reproducibility.ts`)
+### M6 — Reproducibility Scoring Engine
+- Pure client-side (`src/lib/reproducibility.ts`) — no server/AI call
 - 13+ rule-based checks: equations, parameters, units, ICs, symbol cross-reference, gas-transfer, yield coefficients, Henry's law, kinetic constants
-- 5 weighted sub-scores: equations (25%) · parameters (25%) · units (20%) · ICs (20%) · traceability (10%)
-- Overall score 0–100 with readiness gate: `ready` ≥75 + 0 criticals · `partial` ≥40 + ≤1 critical · `not_ready` otherwise
+- 5 weighted sub-scores: equations 25% · parameters 25% · units 20% · ICs 20% · traceability 10%
+- Overall score 0–100, readiness gate: `ready` ≥75 + 0 criticals · `partial` ≥40 + ≤1 critical · `not_ready` otherwise
 - Output: score, sub-scores, readiness, blockers, `MissingItem[]` severity-sorted, next steps
-- UI: Reproducibility tab + score badge in model card header
+- Score badge in model card header; full breakdown in Reproducibility tab
 
 ### M7 — Unit & Dimension Checker
 - Pure client-side (`src/lib/unit-checker.ts`)
 - 10 heuristic checks: dimensionless kinetics, mixed time units, yield bounds, rate consistency, concentration units, dimensionless ratios, unit presence, unit–value agreement, kinetic constant units, Monod constant reasonability
 - Severity levels: high · medium · info
-- Status badge in model card header: `Units: 0H / 5M`
+- Status badge in model card header: e.g. `Units: 0H / 5M`
 - Unit Check tab with check-by-check results
 
 ### M8 — Python ODE Template Generator
-- Pure client-side (`src/lib/python-generator.ts`), fires via `useMemo` in model card
-- 10 output sections: header comment block · imports · `params={}` dict · `y0=[]` ICs · equations comment · `ode_model()` · `solve_ivp` call · plotting · missing info notes · unit check warnings
-- Honest-scaffold: numeric values only where extracted; all equation bodies are `# TODO` stubs with LaTeX shown as comments
-- Readiness warning banner (amber) if `simulation_readiness` is `partial` or `not_ready`
-- Unit check warning banner (red) if any high-severity issues
-- Scrollable code viewer + "Copy to clipboard" + "Download model_template.py"
+- Pure client-side (`src/lib/python-generator.ts`), generated via `useMemo` in model card
+- 10 output sections: header comment · imports · `params={}` dict · `y0=[]` ICs · equations comment · `ode_model()` · `solve_ivp` call · plotting · missing info notes · unit check warnings
+- Honest-scaffold: numeric values only where extracted; equation bodies are `# TODO` stubs with LaTeX shown as comments
+- Amber readiness warning banner if `simulation_readiness` is `partial` or `not_ready`
+- Red unit-check warning banner if any high-severity unit issues
+- Scrollable code viewer · "Copy to clipboard" · "Download model_template.py"
 
-### M9 — Reproducible Model Package Export
-- Client-side ZIP generation (`jszip`) — no server needed
-- "Download Package" button in model card header (Run Simulation + Export JSON preserved)
-- 14-file `model_package/` ZIP: README.md · model_card.md · variables.csv · parameters.csv · equations.md · assumptions.md · limitations.md · missing_information.md · reproducibility_report.json · unit_check_report.json · raw_extraction.json · simulate.py · requirements.txt · source_excerpt.txt
-- simulate.py reuses M8 python-generator — honest scaffold, no hallucinated code
-- README.md embeds repro score, unit check status, all gaps, and how-to-run instructions
-- source_excerpt.txt: deduplicated verbatim source quotes — the traceability record
+### M9 — Reproducible Model Package Export (14-file ZIP)
+- Client-side ZIP generation via `jszip` — no server needed
+- "Download Package" button in model card header
+- 14 files in `model_package/`:
+  - `README.md` — overview, scores, missing gaps, how-to-run instructions
+  - `model_card.md` — full human-readable model card
+  - `equations.md` — LaTeX equations with source context
+  - `variables.csv` — symbol, name, unit, role, source_quote
+  - `parameters.csv` — symbol, value, unit, confidence, source_quote
+  - `assumptions.md` — all assumptions with source context
+  - `limitations.md` — all limitations with source context
+  - `missing_info.md` — missing information with severity levels
+  - `reproduce.md` — reproducibility score breakdown
+  - `reproducibility_report.json` — score breakdown JSON
+  - `unit_check_report.json` — dimensional check results
+  - `simulate.py` — Python ODE scaffold (reuses M8 generator)
+  - `requirements.txt` — `numpy`, `scipy`, `matplotlib`
+  - `source_excerpt.txt` — deduplicated verbatim source quotes (traceability record)
 
 ### M10 — UI Polish & Demo Readiness
-- **Landing page** — bold hero with teal "Simulation-Ready" highlight, "View Demo Model" CTA, amber scientific accuracy callout, NotebookLM side-by-side comparison card, "not a black-box optimizer" section, numbered core workflow cards, example-output stat tiles (repro score, package count, Python, unit check), "Open demo model card" link
-- **Dashboard** — color-coded stat cards with left accent borders (teal/violet/teal), animated skeleton loading rows, icon + retry button error state, clean empty state with CTA
-- **New Extraction** — prominent "Load a demo source text" panel with two pre-fill buttons: Monod Chemostat (Andrews 1968) and Aerobic Bioreactor O₂ transfer; realistic full-length methodology source texts; character counter; "What gets extracted" tip box
-- **Exports** — full rewrite: all buttons now active and linked; green "Available" badges; 4 export cards (Model Package ZIP, Python ODE Template, CSV Tables, Simulation CSV + Raw JSON); explanation of client-side generation
-- **Model Cards** — animated skeleton loading, better empty state with library icon + CTA, search no-results state with clear button, result count badge
-- **Simulation** — already polished; left unchanged
-- **Model Card Detail** — already polished; left unchanged
-- Scientific accuracy note added to landing page (required per spec, honest wording)
-- No exaggerated claims: "digital twin" and "guaranteed optimization" language absent throughout
-
-### Canvas Kanban Board
-- Visual Kanban built directly on the Replit canvas (27 shapes)
-- 3 columns: Done · In Progress / Planned · Future Ideas
-
----
+- **Dashboard** — color-coded stat cards (teal/violet accent borders), animated skeleton loading, icon + retry error state, clean empty state with CTA
+- **New Extraction** — "Load demo source text" panel with two pre-fill buttons: Monod Chemostat (Andrews 1968) and Aerobic Bioreactor O₂ transfer; character counter; "What gets extracted" tip box
+- **Exports page** — full rewrite: all buttons active and linked; green "Available" badges; 4 export cards (Package ZIP · Python ODE · CSV Tables · Simulation CSV + Raw JSON); explanation of client-side generation
+- **Model Cards list** — animated skeleton loading, library-icon empty state with CTA, search no-results state with clear button, result count badge
+- **Simulation** — polished (unchanged in M10)
+- **Model Card Detail** — polished (unchanged in M10)
 
 ### M11 — README & Documentation
-- `README.md` — 14-section product README (honest tone, no exaggeration)
+- `README.md` — 14-section product README (honest tone, no exaggeration, full feature walkthrough)
 - `docs/ARCHITECTURE.md` — monorepo structure, data flow, provider abstraction, proxy routing
-- `docs/API.md` — full endpoint reference with request/response shapes and smoke tests
-- `docs/LOCAL_SETUP.md` — step-by-step setup for local dev and Replit (updated in M12)
-- `docs/ROADMAP.md` — M1–M11 completed detail, M12–M17 planned
-- `docs/MODEL_EXTRACTION_SCHEMA.md` — ExtractionResultSchema field-by-field reference
+- `docs/API.md` — full endpoint reference with request/response shapes and curl smoke tests
+- `docs/LOCAL_SETUP.md` — step-by-step for local dev and Replit, Docker section, Vite proxy tip
+- `docs/ROADMAP.md` — all completed milestones + planned milestones with acceptance criteria
+- `docs/MODEL_EXTRACTION_SCHEMA.md` — `ExtractionResultSchema` field-by-field reference
 
 ### M12 — Portability & Development Handoff
-- `.env.example` — all required/optional vars documented, no real secrets
-- `docker-compose.yml` — single-command local Postgres (no install required)
-- `lib/db/package.json` — added `generate`, `migrate`, `studio`, `seed` scripts
+- `.env.example` — all required/optional vars documented with no real values
+- `docker-compose.yml` — single-command local Postgres (`docker compose up -d`)
+- `lib/db/package.json` — added `generate`, `migrate`, `studio`, `seed` npm scripts
 - `lib/db/drizzle.config.ts` — dotenv loaded automatically; `out` dir for migration files
-- `lib/db/src/seed.ts` — standalone seed script (runnable without the API server)
-- `GET /api/export` — full DB export as JSON (all projects, extractions, model cards)
-- `scripts/src/export-data.ts` — CLI: export all data to JSON file (no server needed)
+- `lib/db/src/seed.ts` — standalone seed script runnable without the API server
+- `GET /api/export` — full DB dump as JSON (all projects + model cards)
+- `scripts/src/export-data.ts` — CLI: export all data to a JSON file
 - `scripts/src/import-data.ts` — CLI: import from exported JSON into a fresh DB
-- `scripts/package.json` — added export-data and import-data scripts + `@workspace/db` dep
-- `.gitignore` — added `.env`, `.env.local`, `.env.*.local`
-- `docs/LOCAL_SETUP.md` — rewritten: correct local ports, Docker section, data export section, correct script names, Vite proxy tip
-- No hardcoded localhost/Replit URLs in source code; Replit plugins already gated on `REPL_ID`
+- `.gitignore` — added `.env`, `.env.local`, `.env.*.local`, `logs/`, `*.log`
+- `docs/LOCAL_SETUP.md` rewritten with correct ports, Docker section, export/import steps
+
+### Deployment Preparation (pre-M13)
+- `artifacts/chem-ai/vite.config.ts` — `PORT` now optional during `vite build` (dev-server-only); production build passes without env vars
+- `artifacts/chem-ai/.replit-artifact/artifact.toml` — title updated to "ChemAI Model Compiler"; production: static serve from `dist/public` with SPA rewrite
+- `artifacts/api-server/.replit-artifact/artifact.toml` — production: `node --enable-source-maps dist/index.mjs`; health check on `/api/healthz`; `PORT=8080` + `NODE_ENV=production` injected
+- `README.md` — "Deploying on Replit" section added: secrets table, one-time schema push step, run commands, verification endpoints, mock-mode feature list
+- Both production builds verified clean: API server (esbuild bundle) + frontend (Vite static)
+- App not yet published — click "Publish" in Replit to deploy
 
 ---
 
-## ⚡ In Progress / Planned
+## ⚡ Planned
 
-### M12 is complete — see Done section above
+### M13 — Real AI Providers
+- Provider interface already wired — `getActiveProvider()` factory exists
+- **OpenAI:** call GPT-4o with structured output (`response_format: { type: "json_object" }`) against `ExtractionResultSchema`
+- **Gemini:** call `gemini-1.5-pro` with JSON mode
+- Provider fallback chain: OpenAI → Gemini → Mock
+- Add provider selection UI (badge/dropdown on New Extraction page)
+- Cost/token usage logging per extraction
+- Add `OPENAI_API_KEY` / `GEMINI_API_KEY` to Replit Secrets to activate
+- Prompt engineering for chemical engineering domain (units, LaTeX, Monod kinetics context)
 
-### Real AI Providers
-- Provider interface is ready — `getActiveProvider()` factory is wired
-- **To do:** set `OPENAI_API_KEY` and/or `GEMINI_API_KEY` env vars
-- OpenAI: call GPT-4o with structured output against `ExtractionResultSchema`
-- Gemini: call `gemini-1.5-pro` with JSON mode
-- Add provider selection UI (dropdown in New Extraction page)
+### M14 — PDF Ingestion
+- Server-side PDF text extraction (`pdf-parse` or `pdfjs-dist`)
+- Binary PDF upload via multipart form (`POST /api/projects/:id/sources` extended)
+- Drag-and-drop PDF upload on New Extraction page
+- Automatic text extraction and chunking before passing to extraction provider
+- Show extracted text preview before confirming extraction
 
-### Exports Page — Downloads
-- Markdown model card export (human-readable `.md` file)
-- CSV export: variables table · parameters table · equations list
-- UI cards exist on the Exports page; downloads need backend route + file generation
+### M15 — Unit Check v2 (Rigorous Dimensional Analysis)
+- Replace heuristic checks with formal dimensional algebra
+- Each equation term gets explicit unit decomposition
+- Report failures by equation and term, not just heuristic patterns
+- Consider: TypeScript unit library (`unitmath`, `mathjs`) or call a Python `pint` microservice
 
-### M3 — Inline Editing
+### M16 — Authentication
+- Replit Auth (OpenID Connect + PKCE) or Clerk
+- Per-user project isolation — users only see their own projects
+- Public / private model card visibility toggle
+- `SESSION_SECRET` env var already reserved in `.env.example`
+
+### M17 — Multi-source Projects
+- Attach multiple source documents to one project
+- Aggregate model card across all sources
+- Conflict detection: same parameter, different values across sources — flag with source attribution
+- `POST /api/projects/:id/sources` already exists; aggregation logic is the new work
+
+### M18 — Inline Editing
 - Edit variable symbol, unit, role inline in the Variables tab
 - Edit parameter symbol, value, unit inline in the Parameters tab
-- Optimistic UI updates + `PATCH /api/...` persistence
-- Undo/redo support
+- Optimistic UI updates + `PATCH /api/variables/:id` and `PATCH /api/parameters/:id` routes
+- Undo/redo stack (client-side)
 
-### GitHub Push-back
-- Finalize model package locally → push JSON + Python template back to source repo
-- Requires GitHub OAuth token or Personal Access Token stored as env var
+### M19 — Automated Tests
+- Vitest unit tests: `analyzeReproducibility`, `runUnitCheck`, `generatePythonOdeTemplate`, `generateModelPackage`
+- API integration tests for all routes (supertest or `node:test`)
+- Playwright E2E: full extraction workflow, model card navigation, ZIP download
+- GitHub Actions CI workflow on push to `main`
 
 ---
 
 ## 💡 Future Ideas
 
-### PDF Upload & Direct Extraction
-- Drag-drop a paper PDF → extract text server-side → run extraction provider
-- No manual copy-paste required
-- Libraries: `pdf-parse` (Node) or `pdfjs-dist` (browser)
+### LaTeX → Runnable Python (AST-based)
+- Parse extracted LaTeX with `latex2sympy2` or custom grammar
+- Generate real Python math instead of `# TODO` stubs
+- Validate dimensional consistency symbolically before generating code
 
-### Multi-Model Comparison
-- Select two or more model cards → side-by-side tab view
-- Overlay simulation results from multiple models on one chart
-- Diff equations, parameters, assumptions between models
-
-### Parameter Fitting from Data
-- Upload experimental time-series CSV (t, X, S)
-- Fit μmax, Ks, Yxs using `scipy.optimize.minimize` or in-browser Nelder-Mead
-- Show fitted vs measured overlay on simulation chart
+### Parameter Fitting from Experimental Data
+- Upload time-series CSV (t, X, S columns)
+- Fit μmax, Ks, Yxs via `scipy.optimize.minimize` or in-browser Nelder-Mead
+- Fitted vs measured overlay on the simulation chart
 
 ### Sensitivity Analysis
 - Vary one parameter across a user-defined range
-- Run ensemble of simulations → plot output bands (min/mean/max)
-- Compute first-order Sobol indices for ranked parameter importance
+- Run simulation ensemble → plot min/mean/max output bands
+- First-order Sobol indices for ranked parameter importance
+
+### Multi-Model Comparison
+- Select two or more model cards → side-by-side tab view
+- Overlay simulation traces from multiple models on one chart
+- Diff equations, parameters, assumptions between models
 
 ### Export to MATLAB / Julia / Modelica
-- Generate simulation stubs for platforms beyond Python/SciPy
 - MATLAB: `.m` script with `ode45`
-- Julia: `DifferentialEquations.jl` compatible
+- Julia: `DifferentialEquations.jl` compatible scaffold
 - Modelica: `.mo` component block
+
+### Gas-Transfer & O₂ Sub-models
+- Built-in `kLa`, Henry's law, dissolved O₂ transfer blocks
+- Toggle on/off for aerobic bioreactor models
+- Pre-validated unit conventions for gas-phase ↔ liquid-phase transfer
+
+### Notebook Export
+- Jupyter `.ipynb` with ODE template, parameter cells pre-filled, and simulation plot cell
+- One-click download from model card header
+
+### Equation Similarity Search
+- Find other model cards that share the same governing equations
+- Match by normalized LaTeX structure, not string equality
+
+### LLM Prompt Transparency
+- Show the exact prompt sent to the AI provider per extraction
+- Side-by-side: prompt → raw response → validated schema
 
 ### Batch Extraction
 - Queue multiple papers (text blocks or PDFs)
-- Process sequentially through the extraction provider
+- Process sequentially through the provider
 - Results page: compare extracted model cards in a table
 
 ### Model Versioning & History
-- Version history per extraction
-- Diff two versions: highlight changed equations, parameters
+- Version history per extraction with diff view
+- Highlight changed equations, parameters between versions
 - Restore any previous version
-
-### LaTeX → Python Translator (AST-based)
-- Parse extracted LaTeX equations using `latex2sympy2` or custom grammar
-- Generate runnable Python math instead of `# TODO` stubs
-- Validate dimensional consistency symbolically
-
-### Gas-Transfer & O₂ Sub-models
-- Built-in `kLa`, Henry's law, and dissolved O₂ transfer blocks
-- Toggle on/off for aerobic bioreactor models
-- Pre-validated unit conventions for gas-phase ↔ liquid-phase transfer
 
 ### Custom Provider Plugins
 - Plugin API: implement `ExtractionProvider`, register via config
 - Community-contributed providers for domain-specific extraction schemas
-- Plugin marketplace or registry (future)
 
-### Inline Equation Editor
-- Click an equation → edit LaTeX inline in the Equations tab
-- Live MathJax preview as you type
-- Save back to DB with audit trail
-
-### CI / CD Integration
-- GitHub Actions template for running simulation tests on every push
-- Auto-export model package on tag/release
+### CI/CD Integration
+- GitHub Actions: run simulation tests on every push
+- Auto-export model package on `git tag`/release
 
 ---
 
 ## How to update this file
 
-- When a planned task is started, move its card to **In Progress / Planned**
-- When a task is complete, move it to **Done** with a short bullet summary of what was built
-- New ideas go at the bottom of **Future Ideas**
-- Keep bullet points short — one line per detail, not paragraphs
+- When a planned milestone is started, add a note to its card in **Planned**
+- When a milestone is complete, move it to **Done** with bullet-point detail of what was built
+- New ideas go at the bottom of **Future Ideas** with a one-line description
+- Keep bullets short — one line per detail, not paragraphs
