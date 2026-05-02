@@ -124,6 +124,7 @@ Pure in-browser RK4 ODE solver for Monod chemostat model (no server).
 | GET | `/api/logout` | Clear session + redirect to provider end-session |
 | POST | `/api/mobile-auth/token-exchange` | Exchange auth code for session token (mobile) |
 | POST | `/api/mobile-auth/logout` | Destroy session token (mobile) |
+| POST | `/api/pdf/parse` | Parse base64 PDF and return extracted text + metadata |
 | GET | `/api/projects` | List projects visible to caller (own + public) |
 | POST | `/api/projects` | Create project (private if authed, public if not) |
 | GET | `/api/projects/:id` | Get project + sources + extractions |
