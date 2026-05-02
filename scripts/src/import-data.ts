@@ -1,5 +1,5 @@
 /**
- * Import ChemEngAI data from a JSON export file into a fresh database.
+ * Import ChemAI Model Compiler data from a JSON export file into a fresh database.
  *
  * Usage:
  *   pnpm --filter @workspace/scripts run import-data -- --in chemengai-export-<timestamp>.json
@@ -100,7 +100,7 @@ async function main(): Promise<void> {
   const inPath = resolveInPath();
   const force = process.argv.includes("--force");
 
-  console.log("ChemEngAI — importing data");
+  console.log("ChemAI Model Compiler — importing data");
   console.log(`  source: ${inPath}`);
 
   const raw = readFileSync(inPath, "utf-8");

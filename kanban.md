@@ -1,4 +1,4 @@
-# ChemEngAI — Project Kanban
+# ChemAI Model Compiler — Project Kanban
 
 > Living document. Move cards between columns as work progresses.
 > Source: https://github.com/MehrzadJami/Serious-Tracker
@@ -29,7 +29,7 @@
 - Seed: chemostat demo scores 100/100 reproducibility, 0H/5M unit check
 
 ### M4 — Branding & Landing Page
-- Product name corrected everywhere: **ChemEngAI** (was "ChemAI" — now fixed in all files)
+- Project name: **ChemAI Model Compiler**
 - "NOT A NOTEBOOKLM CLONE" differentiation section
 - "NOT A BLACK-BOX OPTIMIZER" section
 - Professional hero with flask icon and teal brand color

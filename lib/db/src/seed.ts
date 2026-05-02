@@ -252,7 +252,7 @@ const CHEMOSTAT_RAW_EXTRACTION = {
 };
 
 async function main(): Promise<void> {
-  console.log("ChemEngAI — seed demo data");
+  console.log("ChemAI Model Compiler — seed demo data");
 
   const existing = await db
     .select({ id: projectsTable.id })

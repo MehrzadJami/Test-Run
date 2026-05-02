@@ -1,6 +1,6 @@
-# ChemEngAI Model Compiler
+# ChemAI Model Compiler
 
-**ChemEngAI Model Compiler turns scientific literature and experimental notes into transparent, reproducible, simulation-ready engineering model packages.**
+**ChemAI Model Compiler turns scientific literature and experimental notes into transparent, reproducible, simulation-ready engineering model packages.**
 
 It is a research scaffold tool, not a validated simulation platform or certified digital twin. Every extracted field carries a source quote, a confidence level, and an explicit record of what is missing — so nothing is hidden from the engineer who needs to verify the result.
 
@@ -19,13 +19,13 @@ Chemical and biochemical engineers routinely build simulation models from publis
 
 This takes hours per paper. Much of it is copy-paste work that does not require engineering judgment — it requires pattern recognition that a language model can do.
 
-**ChemEngAI Model Compiler automates steps 1–5** and produces a 14-file model package with structured equations, parameter tables, unit check, reproducibility score, and a Python ODE scaffold. The engineer's judgment is still required to verify, correct, and simulate — but the starting point is a structured, transparent artifact rather than raw prose.
+**ChemAI Model Compiler automates steps 1–5** and produces a 14-file model package with structured equations, parameter tables, unit check, reproducibility score, and a Python ODE scaffold. The engineer's judgment is still required to verify, correct, and simulate — but the starting point is a structured, transparent artifact rather than raw prose.
 
 ---
 
 ## 2. Why this is not a NotebookLM clone
 
-| Capability | NotebookLM | ChemEngAI Model Compiler |
+| Capability | NotebookLM | ChemAI Model Compiler |
 |---|---|---|
 | Summarise and chat with papers | ✓ | ✗ |
 | Audio overviews | ✓ | ✗ |
@@ -38,7 +38,7 @@ This takes hours per paper. Much of it is copy-paste work that does not require 
 | Python ODE scaffold (scipy.integrate) | ✗ | ✓ |
 | 14-file reproducible model package ZIP | ✗ | ✓ |
 
-NotebookLM is a general document assistant. ChemEngAI Model Compiler is a domain-specific extraction and model-card generation tool for chemical engineering literature.
+NotebookLM is a general document assistant. ChemAI Model Compiler is a domain-specific extraction and model-card generation tool for chemical engineering literature.
 
 ---
 
@@ -46,7 +46,7 @@ NotebookLM is a general document assistant. ChemEngAI Model Compiler is a domain
 
 Industrial bioprocess platforms (e.g., Novatek, DASGIP, ambr) optimize validated processes from experimental sensor data. They assume a working, calibrated model exists.
 
-ChemEngAI Model Compiler works at the step *before* that:
+ChemAI Model Compiler works at the step *before* that:
 
 - **Input:** prose from a paper or notes
 - **Output:** a transparent model card with equations, parameter tables, missing-information report, and a Python scaffold
@@ -301,7 +301,7 @@ All requests go through the shared proxy at `localhost:80`. Do not call service 
 
 > **AI-extracted models must be manually verified before use in research, engineering, or decision-making.**
 >
-> ChemEngAI Model Compiler is an extraction and reproducibility aid. It does not guarantee the correctness of extracted equations, parameter values, or units. Confidence levels ("high / medium / low") are model-assigned heuristics, not expert assessments.
+> ChemAI Model Compiler is an extraction and reproducibility aid. It does not guarantee the correctness of extracted equations, parameter values, or units. Confidence levels ("high / medium / low") are model-assigned heuristics, not expert assessments.
 >
 > Always cross-check extracted content against the original source document before using any output in a simulation, publication, or engineering decision.
 

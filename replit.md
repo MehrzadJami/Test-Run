@@ -4,7 +4,7 @@
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
 
-**Project:** ChemEngAI Model Compiler — turns scientific literature and experimental notes into transparent, reproducible, simulation-ready engineering model packages.
+**Project:** ChemAI Model Compiler — turns scientific literature and experimental notes into transparent, reproducible, simulation-ready engineering model packages.
 
 ## Stack
 
@@ -36,7 +36,7 @@ Smoke test: `curl localhost:80/api/healthz` — all requests go through the shar
 ## Artifacts
 
 - `artifacts/api-server` — Express 5 API at `/api`. Projects, source documents, extractions (model cards, equations, variables, parameters, assumptions). Seeds demo on first boot.
-- `artifacts/chem-ai` — React + Vite web UI at `/`. Full ChemEngAI frontend: landing page, dashboard, new extraction, model cards list, 10-tab model card detail, in-browser RK4 simulation, exports guide.
+- `artifacts/chem-ai` — React + Vite web UI at `/`. Full ChemAI Model Compiler frontend: landing page, dashboard, new extraction, model cards list, 10-tab model card detail, in-browser RK4 simulation, exports guide.
 - `artifacts/mockup-sandbox` — design exploration only.
 
 ## Shared Libraries
@@ -125,7 +125,7 @@ See `.env.example` for the full list with descriptions.
 
 ## Milestone Status
 
-M1 Scaffold ✅ · M2 Extraction Engine ✅ · M3 DB Schema ✅ · M4 Model Card UI ✅ · M5 Structured Tabs ✅ · M6 Missing Info ✅ · M7 Reproducibility Score ✅ · M8 Unit Check ✅ · M8b Python ODE Template ✅ · M9 Model Package ZIP ✅ · M10 UI Polish + Demo ✅ · M11 Documentation ✅ · M12 Portability & Handoff ✅
+M1 ✅ · M2 ✅ · M3 ✅ · M4 ✅ · M5 ✅ · M6 ✅ · M7 ✅ · M8 ✅ · M8b ✅ · M9 ✅ · M10 ✅ · M11 ✅ · M12 ✅
 
 Next: M13 Real AI Providers (OpenAI GPT-4o + Gemini 1.5 Pro structured output)
 

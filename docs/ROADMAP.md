@@ -1,6 +1,6 @@
 # Roadmap
 
-This document tracks the milestone plan for ChemEngAI Model Compiler. The project started as a migration of ChemAI from GitHub into Replit and has been extended with new milestones.
+This document tracks the milestone plan for ChemAI Model Compiler.
 
 For the living Kanban board, see `kanban.md`.
 

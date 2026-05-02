@@ -2,7 +2,7 @@
 
 ## Overview
 
-ChemEngAI Model Compiler is a **pnpm monorepo** with a clear separation between the API server, the React frontend, and shared libraries. The system uses a path-based reverse proxy so all traffic passes through `localhost:80`, regardless of which service is handling the request.
+ChemAI Model Compiler is a **pnpm monorepo** with a clear separation between the API server, the React frontend, and shared libraries. The system uses a path-based reverse proxy so all traffic passes through `localhost:80`, regardless of which service is handling the request.
 
 ```
 /           → artifacts/chem-ai   (React + Vite frontend)

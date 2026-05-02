@@ -60,7 +60,7 @@ export default function Home() {
         </h1>
 
         <p className="text-lg md:text-xl text-muted-foreground max-w-2xl leading-relaxed">
-          ChemEngAI extracts equations, variables, parameters, assumptions, and
+          ChemAI extracts equations, variables, parameters, assumptions, and
           missing-information reports from chemical engineering papers — then
           generates transparent, reproducible model packages with Python ODE
           templates, unit checks, and reproducibility scores.
@@ -97,7 +97,7 @@ export default function Home() {
 
       <Separator />
 
-      {/* ── NotebookLM vs ChemEngAI ── */}
+      {/* ── NotebookLM vs ChemAI ── */}
       <section className="max-w-4xl mx-auto space-y-6">
         <div className="text-center space-y-1">
           <div className="flex items-center justify-center gap-2 mb-1">
@@ -132,7 +132,7 @@ export default function Home() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold text-primary flex items-center gap-2">
                 <FlaskConical className="h-4 w-4" />
-                ChemEngAI
+                ChemAI
               </CardTitle>
             </CardHeader>
             <CardContent className="text-sm space-y-1.5">
@@ -158,7 +158,7 @@ export default function Home() {
             <p className="text-muted-foreground leading-relaxed text-sm md:text-base">
               Industrial platforms optimize validated bioprocesses from
               experimental data.{" "}
-              <span className="font-medium text-foreground">ChemEngAI</span>{" "}
+              <span className="font-medium text-foreground">ChemAI</span>{" "}
               is a research scaffold tool. It helps you turn papers into
               transparent model cards with equations, parameter tables,
               missing-information reports, and simulation-ready code —
@@ -230,7 +230,7 @@ export default function Home() {
             Example output
           </h2>
           <p className="text-muted-foreground text-sm md:text-base">
-            What ChemEngAI produces from a single chemostat paper excerpt
+            What ChemAI produces from a single chemostat paper excerpt
           </p>
         </div>
 

@@ -1,5 +1,5 @@
 /**
- * Export all ChemEngAI data to a JSON file.
+ * Export all ChemAI Model Compiler data to a JSON file.
  *
  * Usage:
  *   pnpm --filter @workspace/scripts run export-data
@@ -35,7 +35,7 @@ function resolveOutPath(): string {
 
 async function main(): Promise<void> {
   const outPath = resolveOutPath();
-  console.log("ChemEngAI — exporting data");
+  console.log("ChemAI Model Compiler — exporting data");
   console.log(`  target: ${outPath}`);
 
   const projects = await db

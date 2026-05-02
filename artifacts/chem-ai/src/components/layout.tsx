@@ -39,7 +39,7 @@ export function Sidebar() {
       <div className="md:hidden fixed top-0 left-0 right-0 h-16 border-b border-border bg-background flex items-center justify-between px-4 z-50">
         <Link href="/" className="flex items-center gap-2 text-primary font-bold text-lg">
           <FlaskConical className="w-6 h-6" />
-          <span>ChemEngAI</span>
+          <span>ChemAI</span>
         </Link>
         <Button variant="ghost" size="icon" onClick={() => setIsOpen(!isOpen)}>
           {isOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
@@ -55,7 +55,7 @@ export function Sidebar() {
         <div className="h-16 flex items-center px-6 border-b border-border">
           <Link href="/" className="flex items-center gap-2 text-primary font-bold text-xl hover:opacity-90 transition-opacity">
             <FlaskConical className="w-6 h-6" />
-            <span>ChemEngAI</span>
+            <span>ChemAI</span>
           </Link>
         </div>
 
