@@ -81,7 +81,8 @@ Pure client-side analysis engine (no server, no AI). Called from `model-card-det
 - **Milestone 5 — Simulation ✅**: RK4 integrator, Recharts time-series chart, full parameter inputs.
 - **Milestone 6 — Reproducibility ✅**: Missing information detector, reproducibility score, simulation readiness badge.
 - **Milestone 7 — Unit Check ✅**: MVP heuristic unit & dimension checker, 10 checks, Unit Check tab on model card, status badge in header.
-- **Remaining**: Real AI providers (M2), Exports page real downloads (Markdown/CSV/Python), push back to GitHub.
+- **Milestone 8 — Python ODE Template ✅**: Client-side generator (`python-generator.ts`), rich ODE Template tab, download as `model_template.py`, readiness + unit-check warning banners.
+- **Remaining**: Real AI providers (M2), Exports page (Markdown/CSV), push back to GitHub.
 
 ## GitHub
 

@@ -49,6 +49,7 @@ import {
   type MissingSeverity,
 } from "@/lib/reproducibility";
 import { runUnitCheck, type UnitCheckReport, type UnitWarnSeverity } from "@/lib/unit-checker";
+import { generatePythonOdeTemplate } from "@/lib/python-generator";
 
 // ─── Local raw-extraction passthrough types ────────────────────────────────────
 
@@ -392,6 +393,27 @@ function ModelCardDetailInner({
     () => runUnitCheck(equations, variables, parameters, raw ?? null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectId, cardQuery_nonce(equations, variables, parameters)]
+  );
+
+  // ── Python ODE template (memoized) ───────────────────────────────────────
+  const pythonCode = useMemo(
+    () =>
+      generatePythonOdeTemplate({
+        title: extraction.modelCardTitle,
+        projectName: project?.name ?? "Unknown project",
+        providerUsed: extraction.providerUsed,
+        systemType: raw?.system_type ?? extraction.domain,
+        systemDescription: extraction.systemDescription,
+        equations,
+        variables,
+        parameters,
+        assumptions: [...assumptionItems, ...limitationItems],
+        raw: raw ?? null,
+        report,
+        unitReport,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status]
   );
 
   return (
@@ -894,21 +916,102 @@ function ModelCardDetailInner({
         </TabsContent>
 
         {/* ── ODE Template ── */}
-        <TabsContent value="ode" className="mt-6">
+        <TabsContent value="ode" className="mt-6 space-y-4">
+          {/* Header card with download button */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Code2 className="h-5 w-5 text-muted-foreground" />
-                Generated ODE Template (Python)
-              </CardTitle>
-              <CardDescription>
-                Drop-in starting point using{" "}
-                <code>scipy.integrate.solve_ivp</code>.
-              </CardDescription>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Code2 className="h-5 w-5 text-muted-foreground" />
+                    Python ODE Template
+                  </CardTitle>
+                  <CardDescription>
+                    Auto-generated scaffold using{" "}
+                    <code>scipy.integrate.solve_ivp</code>. Review all{" "}
+                    <code># TODO</code> comments before running.
+                  </CardDescription>
+                </div>
+                <Button
+                  onClick={() => downloadTextFile(pythonCode, "model_template.py")}
+                  data-testid="btn-download-python"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Download model_template.py
+                </Button>
+              </div>
             </CardHeader>
-            <CardContent>
-              <pre className="text-xs bg-muted/50 rounded p-4 overflow-x-auto font-mono leading-relaxed">
-                {extraction.odeTemplate}
+          </Card>
+
+          {/* Readiness warning banner */}
+          {report.simulation_readiness !== "ready" && (
+            <Card className="border-amber-300 bg-amber-50/40 dark:bg-amber-950/20">
+              <CardContent className="pt-4 pb-4">
+                <div className="flex items-start gap-3">
+                  <TriangleAlert className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-amber-800 dark:text-amber-400">
+                      Reproducibility:{" "}
+                      {report.simulation_readiness === "partial"
+                        ? "Partial — some data incomplete"
+                        : "Not ready — significant gaps found"}
+                    </p>
+                    <p className="text-xs text-amber-700 dark:text-amber-500">
+                      The template contains <code># TODO</code> stubs where
+                      extracted data is missing. Resolve the blockers in the
+                      Reproducibility tab before trusting simulation output.
+                    </p>
+                    {report.main_blockers.slice(0, 3).map((b, i) => (
+                      <p key={i} className="text-xs text-amber-700 dark:text-amber-500">
+                        • {b}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Unit check warning banner */}
+          {unitReport.unit_check_status === "fail" && (
+            <Card className="border-red-300 bg-red-50/40 dark:bg-red-950/20">
+              <CardContent className="pt-4 pb-4">
+                <div className="flex items-start gap-3">
+                  <XCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-red-800 dark:text-red-400">
+                      {unitReport.warnings.filter((w) => w.severity === "high").length} high-severity unit issue(s) — check Unit Check tab
+                    </p>
+                    <p className="text-xs text-red-700 dark:text-red-500 mt-1">
+                      Missing or inconsistent units may cause silently wrong
+                      simulation results. Fix before running.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Code viewer */}
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-muted-foreground font-mono">
+                  model_template.py
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(pythonCode);
+                  }}
+                >
+                  Copy to clipboard
+                </Button>
+              </div>
+              <pre className="text-xs bg-muted/50 rounded p-4 overflow-x-auto font-mono leading-relaxed max-h-[640px] overflow-y-auto border border-border/50">
+                {pythonCode}
               </pre>
             </CardContent>
           </Card>
@@ -1248,6 +1351,19 @@ function ModelCardDetailInner({
       </Tabs>
     </div>
   );
+}
+
+/** Trigger a browser download of a text file. */
+function downloadTextFile(content: string, filename: string): void {
+  const blob = new Blob([content], { type: "text/x-python" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /**

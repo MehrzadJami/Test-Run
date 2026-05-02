@@ -21,7 +21,7 @@ export interface AnalysisVariable {
   id: number;
   symbol: string;
   name: string;
-  unit: string | null | undefined;
+  unit?: string | null | undefined;
   role: string;
   sourceQuote: string;
 }
@@ -29,8 +29,8 @@ export interface AnalysisVariable {
 export interface AnalysisParameter {
   id: number;
   symbol: string;
-  value: string | null | undefined;
-  unit: string | null | undefined;
+  value?: string | null | undefined;
+  unit?: string | null | undefined;
   confidence: string;
   sourceQuote: string;
 }
@@ -102,6 +102,9 @@ export interface RawExtractionInput {
   limitations?: RawLimitationEntry[];
   model_card?: RawModelCardEntry;
 }
+
+/** Alias so consumer modules can import a single `RawExtraction` type. */
+export type RawExtraction = RawExtractionInput;
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 

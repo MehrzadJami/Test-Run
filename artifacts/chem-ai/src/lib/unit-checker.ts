@@ -417,7 +417,7 @@ export function runUnitCheck(
   {
     const allEqText = [
       ...equations.map((e) => e.latex + " " + e.description),
-      ...(raw?.equations ?? []).map((e) => safeStr(e.equation_latex) + " " + safeStr(e.equation_plaintext)),
+      ...(raw?.equations ?? []).map((eq) => safeStr(eq.equation_latex) + " " + safeStr(eq.equation_plaintext)),
     ].join(" ");
 
     for (const p of parameters) {
