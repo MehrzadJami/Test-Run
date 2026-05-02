@@ -1,0 +1,63 @@
+Build Milestone 7: Unit and Dimension Checking MVP.
+
+Do not build a full symbolic math engine.
+Build a practical heuristic checker for common chemical-engineering ODE models.
+
+Goal:
+Flag obvious unit problems, missing units, undefined symbols, and suspicious model inconsistencies.
+
+Checks:
+1. Every equation should list variables_involved.
+2. Every symbol in variables_involved should exist in either variables or parameters.
+3. Every state variable should have a unit.
+4. Every parameter should have a unit or be marked unknown.
+5. For ODE-like equations containing dX/dt, dx/dt, dS/dt, dC/dt:
+   - detect the left-hand state variable
+   - detect its unit
+   - infer expected derivative unit as state unit per time
+   - warn if time unit is missing
+6. Detect common kinetic units:
+   - mu, mumax, D, k should usually be 1/time
+   - X, S, C should usually be concentration-like
+   - yield coefficients like Yxs should usually be biomass/substrate or dimensionless-like ratio
+   - kLa/kla should usually be 1/time
+7. Detect mixed time units if h, day, min, and s appear together.
+8. Detect gas-transfer/Henry-law missing details if O2, CO2, Henry, gas-liquid, kLa, or equilibrium are mentioned.
+9. Detect parameters not used in equations.
+10. Detect equation symbols missing from the variable/parameter tables.
+
+Output shape:
+
+{
+  "unit_check_status": "pass/warning/fail",
+  "warnings": [
+    {
+      "severity": "low/medium/high",
+      "message": "...",
+      "equation_or_symbol": "...",
+      "suggestion": "..."
+    }
+  ]
+}
+
+Frontend:
+Add a "Unit Check" tab or section in the Model Card Detail page.
+
+Show:
+- overall status
+- warnings grouped by severity
+- affected symbol/equation
+- suggestion
+
+Label it clearly:
+"MVP heuristic unit checker"
+
+Important:
+Be helpful and conservative, not overconfident.
+Do not pretend this is a complete dimensional-analysis engine.
+
+After finishing:
+- Tell me where the unit checker logic lives
+- Tell me what checks were implemented
+- Tell me how to test it
+- Confirm the app still runs

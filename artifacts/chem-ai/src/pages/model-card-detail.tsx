@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useParams, Link } from "wouter";
 import {
   useGetModelCardByProject,
@@ -35,7 +36,20 @@ import {
   Sparkles,
   Play,
   Info,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldOff,
+  CheckCircle2,
+  XCircle,
+  TriangleAlert,
 } from "lucide-react";
+import {
+  analyzeReproducibility,
+  type ReproducibilityReport,
+  type MissingSeverity,
+} from "@/lib/reproducibility";
+
+// ─── Local raw-extraction passthrough types ────────────────────────────────────
 
 type Confidence = "high" | "medium" | "low";
 
@@ -102,6 +116,8 @@ type RawExtraction = {
   model_card?: RawModelCard;
 };
 
+// ─── Small shared display components ─────────────────────────────────────────
+
 function ConfidenceBadge({ value }: { value?: Confidence }) {
   if (!value) return null;
   return (
@@ -150,6 +166,127 @@ function NotFound({ message }: { message: string }) {
   );
 }
 
+// ─── Reproducibility-tab sub-components ───────────────────────────────────────
+
+function scoreColor(score: number): string {
+  if (score >= 70) return "bg-emerald-500";
+  if (score >= 40) return "bg-amber-400";
+  return "bg-destructive";
+}
+
+function scoreTextColor(score: number): string {
+  if (score >= 70) return "text-emerald-600 dark:text-emerald-400";
+  if (score >= 40) return "text-amber-600 dark:text-amber-400";
+  return "text-destructive";
+}
+
+function ScoreBar({
+  label,
+  score,
+  description,
+}: {
+  label: string;
+  score: number;
+  description?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium">{label}</span>
+        <span className={`font-mono font-bold ${scoreTextColor(score)}`}>
+          {score}
+        </span>
+      </div>
+      <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${scoreColor(score)}`}
+          style={{ width: `${score}%` }}
+        />
+      </div>
+      {description ? (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ReadinessBadge({
+  readiness,
+}: {
+  readiness: ReproducibilityReport["simulation_readiness"];
+}) {
+  if (readiness === "ready") {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-400">
+        <ShieldCheck className="h-5 w-5 shrink-0" />
+        <div>
+          <p className="font-semibold text-sm">Simulation Ready</p>
+          <p className="text-xs opacity-80">
+            Equations, parameters, units, and initial conditions are
+            sufficiently complete.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (readiness === "partial") {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 text-amber-700 dark:text-amber-400">
+        <ShieldAlert className="h-5 w-5 shrink-0" />
+        <div>
+          <p className="font-semibold text-sm">Partially Ready</p>
+          <p className="text-xs opacity-80">
+            Some critical information is missing. Review blockers before
+            attempting simulation.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive">
+      <ShieldOff className="h-5 w-5 shrink-0" />
+      <div>
+        <p className="font-semibold text-sm">Not Ready for Simulation</p>
+        <p className="text-xs opacity-80">
+          Critical information is missing. The model cannot be reliably
+          reproduced or simulated without further extraction.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const SEVERITY_CONFIG: Record<
+  MissingSeverity,
+  {
+    icon: typeof XCircle;
+    classes: string;
+    label: string;
+  }
+> = {
+  critical: {
+    icon: XCircle,
+    classes:
+      "bg-destructive/10 border-destructive/30 text-destructive dark:text-destructive",
+    label: "Critical",
+  },
+  warning: {
+    icon: TriangleAlert,
+    classes:
+      "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800/40 text-amber-800 dark:text-amber-300",
+    label: "Warning",
+  },
+  info: {
+    icon: Info,
+    classes:
+      "bg-muted/50 border-border text-muted-foreground",
+    label: "Info",
+  },
+};
+
+// ─── Main page component ───────────────────────────────────────────────────────
+
 export default function ModelCardDetail() {
   const params = useParams();
   const projectId = Number(params.id);
@@ -183,8 +320,75 @@ export default function ModelCardDetail() {
   const modelCard = raw?.model_card;
 
   return (
+    <ModelCardDetailInner
+      projectId={projectId}
+      project={project}
+      extraction={extraction}
+      equations={equations}
+      variables={variables}
+      parameters={parameters}
+      assumptionItems={assumptionItems}
+      limitationItems={limitationItems}
+      raw={raw}
+      modelCard={modelCard}
+    />
+  );
+}
+
+// Split into inner component so useMemo hooks are always called unconditionally
+
+function ModelCardDetailInner({
+  projectId,
+  project,
+  extraction,
+  equations,
+  variables,
+  parameters,
+  assumptionItems,
+  limitationItems,
+  raw,
+  modelCard,
+}: {
+  projectId: number;
+  project: { name: string } | null | undefined;
+  extraction: {
+    domain: string;
+    providerUsed: string;
+    status: string;
+    modelCardTitle: string;
+    systemDescription: string;
+    problemStatement: string;
+    odeTemplate: string;
+    rawExtractionJson: unknown;
+  };
+  equations: { id: number; latex: string; description: string; sourceQuote: string }[];
+  variables: { id: number; symbol: string; name: string; unit?: string | null; role: string; sourceQuote: string }[];
+  parameters: { id: number; symbol: string; value?: string | null; unit?: string | null; confidence: string; sourceQuote: string }[];
+  assumptionItems: { id: number; text: string; kind: string }[];
+  limitationItems: { id: number; text: string; kind: string }[];
+  raw: RawExtraction | null | undefined;
+  modelCard: RawModelCard | null | undefined;
+}) {
+  // ── Reproducibility analysis (memoized — runs only when data changes) ──────
+  const report = useMemo(
+    () =>
+      analyzeReproducibility(
+        equations,
+        variables,
+        parameters,
+        [...assumptionItems, ...limitationItems],
+        raw ?? null,
+        extraction.systemDescription ?? "",
+        extraction.problemStatement ?? "",
+        extraction.odeTemplate ?? ""
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters)]
+  );
+
+  return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge
@@ -204,6 +408,13 @@ export default function ModelCardDetail() {
             className="text-[10px] uppercase"
           >
             {extraction.status}
+          </Badge>
+          {/* Reproducibility score badge in header */}
+          <Badge
+            variant="outline"
+            className={`text-[10px] font-mono ${scoreTextColor(report.overall_score)}`}
+          >
+            Repro: {report.overall_score}/100
           </Badge>
         </div>
         <div className="flex items-start justify-between gap-4">
@@ -252,7 +463,7 @@ export default function ModelCardDetail() {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* ── Tabs ── */}
       <Tabs defaultValue="overview" className="w-full">
         <TabsList className="flex flex-wrap h-auto gap-1 w-full lg:w-auto">
           <TabsTrigger value="overview" data-testid="tab-overview">
@@ -276,12 +487,15 @@ export default function ModelCardDetail() {
           <TabsTrigger value="ode" data-testid="tab-ode">
             ODE Template
           </TabsTrigger>
+          <TabsTrigger value="reproducibility" data-testid="tab-reproducibility">
+            Reproducibility
+          </TabsTrigger>
           <TabsTrigger value="raw" data-testid="tab-raw">
             Raw JSON
           </TabsTrigger>
         </TabsList>
 
-        {/* Overview */}
+        {/* ── Overview ── */}
         <TabsContent value="overview" className="space-y-6 mt-6">
           <Card>
             <CardHeader>
@@ -356,7 +570,7 @@ export default function ModelCardDetail() {
           ) : null}
         </TabsContent>
 
-        {/* Variables */}
+        {/* ── Variables ── */}
         <TabsContent value="variables" className="mt-6">
           <Card>
             <CardHeader>
@@ -392,8 +606,10 @@ export default function ModelCardDetail() {
                         />
                       </TableCell>
                       <TableCell>
-                        <span className="font-mono text-xs bg-muted/50 rounded px-2 py-1">
-                          {v.unit || "—"}
+                        <span
+                          className={`font-mono text-xs rounded px-2 py-1 ${v.unit ? "bg-muted/50" : "bg-destructive/10 text-destructive"}`}
+                        >
+                          {v.unit || "missing"}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -415,7 +631,7 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
-        {/* Parameters */}
+        {/* ── Parameters ── */}
         <TabsContent value="parameters" className="mt-6">
           <Card>
             <CardHeader>
@@ -448,11 +664,17 @@ export default function ModelCardDetail() {
                         {raw?.parameters?.[i]?.name ?? "—"}
                       </TableCell>
                       <TableCell className="font-mono text-sm">
-                        {p.value}
+                        {p.value ?? (
+                          <span className="text-destructive italic text-xs">
+                            missing
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>
-                        <span className="font-mono text-xs bg-muted/50 rounded px-2 py-1">
-                          {p.unit || "—"}
+                        <span
+                          className={`font-mono text-xs rounded px-2 py-1 ${p.unit ? "bg-muted/50" : "bg-destructive/10 text-destructive"}`}
+                        >
+                          {p.unit || "missing"}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -469,7 +691,7 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
-        {/* Equations */}
+        {/* ── Equations ── */}
         <TabsContent value="equations" className="mt-6">
           <Card>
             <CardHeader>
@@ -518,7 +740,7 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
-        {/* Assumptions */}
+        {/* ── Assumptions ── */}
         <TabsContent value="assumptions" className="mt-6 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="bg-muted/30 border-muted-foreground/20">
@@ -575,7 +797,10 @@ export default function ModelCardDetail() {
                 ) : (
                   <ul className="space-y-3">
                     {limitationItems.map((item, i) => (
-                      <li key={item.id} className="text-sm text-destructive/90">
+                      <li
+                        key={item.id}
+                        className="text-sm text-destructive/90"
+                      >
                         <div className="flex items-start gap-2">
                           <span className="mt-0.5">•</span>
                           <div>
@@ -599,7 +824,7 @@ export default function ModelCardDetail() {
           </div>
         </TabsContent>
 
-        {/* Missing Info */}
+        {/* ── Missing Info (from model card) ── */}
         <TabsContent value="missing" className="mt-6">
           <Card>
             <CardHeader>
@@ -608,15 +833,16 @@ export default function ModelCardDetail() {
                 Missing Information
               </CardTitle>
               <CardDescription>
-                Data, parameters, or conditions not present in the source
-                material that would be needed for a complete model.
+                Data, parameters, or conditions the AI provider identified as
+                absent from the source material.
               </CardDescription>
             </CardHeader>
             <CardContent>
               {(modelCard?.missing_information ?? []).length === 0 ? (
                 <p className="text-sm text-muted-foreground italic">
-                  No missing information identified — or no model card available
-                  for this extraction.
+                  No missing information identified by the AI provider — or no
+                  model card available for this extraction. See the
+                  Reproducibility tab for a rule-based analysis.
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -635,7 +861,7 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
-        {/* ODE Template */}
+        {/* ── ODE Template ── */}
         <TabsContent value="ode" className="mt-6">
           <Card>
             <CardHeader>
@@ -656,7 +882,157 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
-        {/* Raw JSON */}
+        {/* ── Reproducibility ── */}
+        <TabsContent value="reproducibility" className="mt-6 space-y-6">
+          {/* Overall score + readiness */}
+          <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6">
+            <Card className="flex flex-col items-center justify-center px-10 py-8 text-center min-w-[180px]">
+              <p className="text-xs font-mono uppercase tracking-widest text-muted-foreground mb-2">
+                Overall Score
+              </p>
+              <div
+                className={`text-6xl font-bold tabular-nums ${scoreTextColor(report.overall_score)}`}
+              >
+                {report.overall_score}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">out of 100</p>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold uppercase tracking-widest text-muted-foreground">
+                  Score Breakdown
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <ScoreBar
+                  label="Equations Completeness"
+                  score={report.equations_completeness}
+                  description="LaTeX notation, descriptions, and source quotes for each equation."
+                />
+                <ScoreBar
+                  label="Parameters Completeness"
+                  score={report.parameters_completeness}
+                  description="Numerical values, units, and traceability for each parameter."
+                />
+                <ScoreBar
+                  label="Units Completeness"
+                  score={report.units_completeness}
+                  description="Explicit physical units on all variables and parameters."
+                />
+                <ScoreBar
+                  label="Initial Conditions"
+                  score={report.initial_conditions_completeness}
+                  description="Starting values for state variables and boundary/input conditions."
+                />
+                <ScoreBar
+                  label="Source Traceability"
+                  score={report.source_traceability}
+                  description="Proportion of items linked back to source quotes in the paper."
+                />
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Simulation readiness */}
+          <ReadinessBadge readiness={report.simulation_readiness} />
+
+          {/* Main blockers */}
+          {report.main_blockers.length > 0 && (
+            <Card className="border-destructive/30">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-destructive flex items-center gap-2">
+                  <XCircle className="h-4 w-4" />
+                  Main Blockers
+                </CardTitle>
+                <CardDescription>
+                  These issues must be resolved before reliable simulation is
+                  possible.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2">
+                  {report.main_blockers.map((b, i) => (
+                    <li
+                      key={i}
+                      className="flex items-start gap-2 text-sm text-destructive"
+                    >
+                      <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                      {b}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Missing items list */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold uppercase tracking-widest text-muted-foreground">
+                Detailed Missing Information Report
+              </CardTitle>
+              <CardDescription>
+                {report.missing_items.length === 0
+                  ? "No issues detected."
+                  : `${report.missing_items.filter((m) => m.severity === "critical").length} critical · ${report.missing_items.filter((m) => m.severity === "warning").length} warnings · ${report.missing_items.filter((m) => m.severity === "info").length} informational`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {report.missing_items.length === 0 ? (
+                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 text-sm">
+                  <CheckCircle2 className="h-4 w-4" />
+                  No missing information detected.
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {report.missing_items.map((item, i) => {
+                    const cfg = SEVERITY_CONFIG[item.severity];
+                    const Icon = cfg.icon;
+                    return (
+                      <li
+                        key={i}
+                        className={`flex items-start gap-3 p-3 rounded-lg border text-sm ${cfg.classes}`}
+                      >
+                        <Icon className="h-4 w-4 mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="font-semibold mr-2 text-xs uppercase tracking-wider opacity-70">
+                            [{item.category}]
+                          </span>
+                          {item.description}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Recommended next steps */}
+          <Card className="bg-primary/5 border-primary/20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-primary" />
+                Recommended Next Steps
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ol className="space-y-3">
+                {report.recommended_next_steps.map((step, i) => (
+                  <li key={i} className="flex items-start gap-3 text-sm">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center mt-0.5">
+                      {i + 1}
+                    </span>
+                    {step}
+                  </li>
+                ))}
+              </ol>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Raw JSON ── */}
         <TabsContent value="raw" className="mt-6">
           <Card>
             <CardHeader>
@@ -677,8 +1053,8 @@ export default function ModelCardDetail() {
                 </pre>
               ) : (
                 <p className="text-sm text-muted-foreground italic">
-                  No raw extraction JSON available for this record (pre-migration
-                  row).
+                  No raw extraction JSON available for this record
+                  (pre-migration row).
                 </p>
               )}
             </CardContent>
@@ -686,5 +1062,22 @@ export default function ModelCardDetail() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/**
+ * Tiny cache-key helper: returns a number that changes whenever the data
+ * arrays change identity. Avoids useMemo re-running on every render when
+ * data is stable.
+ */
+function cardQuery_nonce(
+  equations: { id: number }[],
+  variables: { id: number }[],
+  parameters: { id: number }[]
+): number {
+  return (
+    (equations[0]?.id ?? 0) * 1_000_000 +
+    (variables[0]?.id ?? 0) * 1_000 +
+    (parameters[0]?.id ?? 0)
   );
 }
