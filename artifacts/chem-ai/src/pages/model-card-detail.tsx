@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParams, Link } from "wouter";
 import {
   useGetModelCardByProject,
@@ -42,6 +42,8 @@ import {
   CheckCircle2,
   XCircle,
   TriangleAlert,
+  Package,
+  Loader2,
 } from "lucide-react";
 import {
   analyzeReproducibility,
@@ -50,6 +52,7 @@ import {
 } from "@/lib/reproducibility";
 import { runUnitCheck, type UnitCheckReport, type UnitWarnSeverity } from "@/lib/unit-checker";
 import { generatePythonOdeTemplate } from "@/lib/python-generator";
+import { generateModelPackage } from "@/lib/package-generator";
 
 // ─── Local raw-extraction passthrough types ────────────────────────────────────
 
@@ -416,6 +419,57 @@ function ModelCardDetailInner({
     [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status]
   );
 
+  // ── Model Package download (M9) ─────────────────────────────────────────
+  const [downloading, setDownloading] = useState(false);
+
+  async function handleDownloadPackage() {
+    setDownloading(true);
+    try {
+      const files = generateModelPackage({
+        title: extraction.modelCardTitle,
+        projectName: project?.name ?? "Unknown project",
+        providerUsed: extraction.providerUsed,
+        domain: extraction.domain,
+        systemType: raw?.system_type ?? extraction.domain,
+        systemDescription: extraction.systemDescription,
+        problemStatement: extraction.problemStatement,
+        equations,
+        variables,
+        parameters,
+        assumptionItems,
+        limitationItems,
+        raw: raw ?? null,
+        report,
+        unitReport,
+        pythonCode,
+      });
+
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const folder = zip.folder("model_package")!;
+      for (const [filename, content] of Object.entries(files)) {
+        folder.file(filename, content);
+      }
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      const safeName = extraction.modelCardTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .slice(0, 40)
+        .replace(/_+$/, "");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `chemengai_${safeName}_package.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
       {/* ── Header ── */}
@@ -495,6 +549,17 @@ function ModelCardDetailInner({
                 </Button>
               </Link>
             )}
+            <Button
+              variant="outline"
+              onClick={() => { void handleDownloadPackage(); }}
+              disabled={downloading}
+              data-testid="btn-download-package"
+            >
+              {downloading
+                ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                : <Package className="h-4 w-4 mr-2" />}
+              {downloading ? "Building…" : "Download Package"}
+            </Button>
             <a
               href={`${import.meta.env.BASE_URL}api/projects/${projectId}/export`}
               target="_blank"

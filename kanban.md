@@ -96,6 +96,13 @@
 - Gemini: call `gemini-1.5-pro` with JSON mode
 - Add provider selection UI (dropdown in New Extraction page)
 
+### M9 — Reproducible Model Package Export ✅
+- Client-side ZIP generation (jszip) — no server needed
+- 14-file package: README.md, model_card.md, variables.csv, parameters.csv, equations.md, assumptions.md, limitations.md, missing_information.md, reproducibility_report.json, unit_check_report.json, raw_extraction.json, simulate.py, requirements.txt, source_excerpt.txt
+- "Download Package" button added to model card header (existing buttons preserved)
+- simulate.py is the python-generator output (honest scaffold, not hallucinated code)
+- README embeds reproducibility score, unit check status, missing gaps, and how-to-run instructions
+
 ### Exports Page — Downloads
 - Markdown model card export (human-readable `.md` file)
 - CSV export: variables table · parameters table · equations list
