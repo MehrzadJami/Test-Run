@@ -3,13 +3,21 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: ChemAI Model Extractor API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: projects
+    description: Research projects
+  - name: sources
+    description: Source documents within a project
+  - name: extractions
+    description: AI-extracted model artifacts (model card, equations, variables, parameters, assumptions, ODE template)
+  - name: export
+    description: Export stored data
 paths:
   /healthz:
     get:
@@ -24,6 +32,204 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List all projects
+      responses:
+        "200":
+          description: List of projects with summary stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectSummary"
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{projectId}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get a project with all its source documents and extractions
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Project with nested data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDetail"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: Delete a project (cascades to all sources and extractions)
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /projects/{projectId}/sources:
+    post:
+      operationId: addSourceDocument
+      tags: [sources]
+      summary: Add a source document (raw text or pasted PDF text) to a project
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSourceDocumentInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceDocument"
+        "404":
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /projects/{projectId}/extractions:
+    post:
+      operationId: createExtraction
+      tags: [extractions]
+      summary: Run an extraction on the most recent source document and save the result
+      description: |
+        Uses the active LLM provider (mock by default). Persists the model card, equations,
+        variables, parameters, assumptions, limitations, and ODE template.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExtractionInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCard"
+        "400":
+          description: No source document available to extract from
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /projects/{projectId}/model-card:
+    get:
+      operationId: getModelCardByProject
+      tags: [extractions]
+      summary: Get the latest model card for a project
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Latest model card with all related artifacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCard"
+        "404":
+          description: Project or model card not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /projects/{projectId}/export:
+    get:
+      operationId: exportProject
+      tags: [export]
+      summary: Export the project and all stored data as a single JSON document
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Exported project bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectExport"
+        "404":
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +240,306 @@ components:
       required:
         - status
 
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, description, createdAt, updatedAt]
+
+    ProjectSummary:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          properties:
+            sourceDocumentCount:
+              type: integer
+            extractionCount:
+              type: integer
+            latestExtractionTitle:
+              type: ["string", "null"]
+          required:
+            - sourceDocumentCount
+            - extractionCount
+            - latestExtractionTitle
+
+    ProjectDetail:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          properties:
+            sourceDocuments:
+              type: array
+              items:
+                $ref: "#/components/schemas/SourceDocument"
+            extractions:
+              type: array
+              items:
+                $ref: "#/components/schemas/ExtractionSummary"
+          required: [sourceDocuments, extractions]
+
+    CreateProjectInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+      required: [name]
+
+    SourceDocument:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        kind:
+          type: string
+          enum: [text, pdf]
+        filename:
+          type: ["string", "null"]
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, projectId, kind, filename, content, createdAt]
+
+    AddSourceDocumentInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [text, pdf]
+        filename:
+          type: ["string", "null"]
+        content:
+          type: string
+          minLength: 1
+      required: [kind, content]
+
+    CreateExtractionInput:
+      type: object
+      properties:
+        sourceDocumentId:
+          type: ["integer", "null"]
+          description: Optional — if omitted, uses the most recent source document for the project.
+
+    Equation:
+      type: object
+      properties:
+        id:
+          type: integer
+        ordinal:
+          type: integer
+        latex:
+          type: string
+        description:
+          type: string
+        sourceQuote:
+          type: string
+      required: [id, ordinal, latex, description, sourceQuote]
+
+    Variable:
+      type: object
+      properties:
+        id:
+          type: integer
+        ordinal:
+          type: integer
+        symbol:
+          type: string
+        name:
+          type: string
+        unit:
+          type: string
+        role:
+          type: string
+          enum: [state, input, output]
+        sourceQuote:
+          type: string
+      required: [id, ordinal, symbol, name, unit, role, sourceQuote]
+
+    Parameter:
+      type: object
+      properties:
+        id:
+          type: integer
+        ordinal:
+          type: integer
+        symbol:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        sourceQuote:
+          type: string
+      required: [id, ordinal, symbol, value, unit, confidence, sourceQuote]
+
+    Assumption:
+      type: object
+      properties:
+        id:
+          type: integer
+        ordinal:
+          type: integer
+        kind:
+          type: string
+          enum: [assumption, limitation]
+        text:
+          type: string
+      required: [id, ordinal, kind, text]
+
+    ExtractionSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        sourceDocumentId:
+          type: ["integer", "null"]
+        providerUsed:
+          type: string
+          enum: [mock, openai, gemini]
+        status:
+          type: string
+          enum: [pending, ready, failed]
+        modelCardTitle:
+          type: string
+        domain:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - projectId
+        - sourceDocumentId
+        - providerUsed
+        - status
+        - modelCardTitle
+        - domain
+        - createdAt
+        - updatedAt
+
+    ModelCard:
+      type: object
+      properties:
+        extraction:
+          type: object
+          properties:
+            id:
+              type: integer
+            projectId:
+              type: integer
+            sourceDocumentId:
+              type: ["integer", "null"]
+            providerUsed:
+              type: string
+              enum: [mock, openai, gemini]
+            status:
+              type: string
+              enum: [pending, ready, failed]
+            modelCardTitle:
+              type: string
+            domain:
+              type: string
+            systemDescription:
+              type: string
+            problemStatement:
+              type: string
+            odeTemplate:
+              type: string
+            rawExtractionJson:
+              type: ["object", "null"]
+              additionalProperties: true
+              description: >-
+                Full validated provider output matching the canonical
+                ExtractionResultSchema (paper_title_or_topic, system_type,
+                process_description, state_variables, parameters, equations,
+                assumptions, limitations, model_card). Null for legacy rows
+                created before this column existed; clients should fall back
+                to the normalized tables in that case.
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+          required:
+            - id
+            - projectId
+            - sourceDocumentId
+            - providerUsed
+            - status
+            - modelCardTitle
+            - domain
+            - systemDescription
+            - problemStatement
+            - odeTemplate
+            - rawExtractionJson
+            - createdAt
+            - updatedAt
+        equations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Equation"
+        variables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Variable"
+        parameters:
+          type: array
+          items:
+            $ref: "#/components/schemas/Parameter"
+        assumptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Assumption"
+      required: [extraction, equations, variables, parameters, assumptions]
+
+    ProjectExport:
+      type: object
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
+        sourceDocuments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceDocument"
+        modelCards:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModelCard"
+        exportedAt:
+          type: string
+          format: date-time
+      required: [project, sourceDocuments, modelCards, exportedAt]

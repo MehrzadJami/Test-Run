@@ -1,0 +1,67 @@
+Build Milestone 4: professional Model Card interface and updated product positioning.
+
+Do not rewrite the backend.
+Do not change the database architecture.
+Do not add real AI providers yet.
+
+Update product name everywhere:
+ChemAI Model Compiler
+
+Update positioning across the app:
+ChemAI Model Compiler is a research tool that converts scientific literature and experimental notes into transparent, reproducible, simulation-ready engineering model packages.
+
+Add this message to the landing page:
+"Industrial platforms optimize validated bioprocesses from experimental data. ChemAI Model Compiler helps researchers turn papers and notes into transparent model cards, equations, parameter tables, missing-information reports, and simulation-ready code."
+
+Add a section called:
+"Not a black-box optimizer"
+
+Explain:
+This tool focuses on transparency, source snippets, units, assumptions, missing data, and reproducibility. It helps researchers understand and rebuild models before optimization.
+
+Improve the Model Card Detail page.
+
+It should show:
+1. Project title
+2. Paper title/topic
+3. System type
+4. Process description
+5. Model summary
+6. Inputs
+7. Outputs
+8. Control variables
+9. State variables table
+10. Parameters table
+11. Equations section with LaTeX/plaintext display
+12. Assumptions
+13. Limitations
+14. Missing information
+15. Confidence labels
+16. Source context snippets
+17. ODE template tab if already available
+18. Raw JSON export button if already available
+
+Tabs:
+- Overview
+- Variables
+- Parameters
+- Equations
+- Assumptions
+- Missing Info
+- ODE Template
+- Raw JSON
+
+Design:
+Clean, academic, serious, portfolio-ready.
+Tables for variables and parameters.
+Cards for assumptions, limitations, and missing information.
+Readable on desktop and mobile.
+
+Important:
+This page is the main portfolio screenshot. Make it polished.
+
+After finishing:
+- Confirm the app still runs
+- Tell me what files changed
+- Tell me how to test the model card page
+- Tell me any remaining display/data issues

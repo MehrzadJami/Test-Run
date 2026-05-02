@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "ChemAI Model Extractor"
+version = "1.0.0"
+id = "chem-ai"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 5173
+
+[services.development]
+run = "pnpm --filter @workspace/chem-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/chem-ai", "run", "build" ]
+publicDir = "artifacts/chem-ai/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "5173"
+BASE_PATH = "/"

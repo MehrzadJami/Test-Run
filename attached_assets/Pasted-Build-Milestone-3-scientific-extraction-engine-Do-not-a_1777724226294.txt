@@ -1,0 +1,90 @@
+Build Milestone 3: scientific extraction engine.
+
+Do not add real OpenAI/Gemini providers yet.
+Use deterministic mock extraction first.
+Leave a clean provider adapter/interface so real providers can be added later.
+
+Create or strengthen an extraction service that takes scientific text and returns strict structured JSON.
+
+The JSON must follow this shape:
+
+{
+  "paper_title_or_topic": "...",
+  "system_type": "...",
+  "process_description": "...",
+  "state_variables": [
+    {
+      "symbol": "...",
+      "name": "...",
+      "meaning": "...",
+      "unit": "...",
+      "role": "state/input/output/parameter/control",
+      "source_context": "...",
+      "confidence": "high/medium/low"
+    }
+  ],
+  "parameters": [
+    {
+      "symbol": "...",
+      "name": "...",
+      "value": "...",
+      "unit": "...",
+      "source_context": "...",
+      "confidence": "high/medium/low"
+    }
+  ],
+  "equations": [
+    {
+      "label": "...",
+      "equation_latex": "...",
+      "equation_plaintext": "...",
+      "meaning": "...",
+      "variables_involved": ["..."],
+      "source_context": "...",
+      "confidence": "high/medium/low"
+    }
+  ],
+  "assumptions": [
+    {
+      "assumption": "...",
+      "source_context": "...",
+      "confidence": "high/medium/low"
+    }
+  ],
+  "limitations": [
+    {
+      "limitation": "...",
+      "source_context": "...",
+      "confidence": "high/medium/low"
+    }
+  ],
+  "model_card": {
+    "short_summary": "...",
+    "model_type": "...",
+    "inputs": ["..."],
+    "outputs": ["..."],
+    "control_variables": ["..."],
+    "missing_information": ["..."],
+    "can_generate_ode_template": true
+  }
+}
+
+Requirements:
+1. Validate input text.
+2. Reject empty or too-short text with useful 400 errors.
+3. Validate provider output with Zod before saving.
+4. If provider output is malformed, return a useful 502-style provider error instead of crashing.
+5. Save normalized data into existing tables.
+6. Save full validated output into raw_extraction_json.
+7. Add frontend button: "Extract Model Data".
+8. After extraction, navigate to the generated model card.
+9. Display extracted data in clean cards/tables.
+10. Keep mock mode working without any API key.
+
+Focus on scientific/engineering extraction, not generic summarization.
+
+After finishing:
+- Tell me what extraction schema exists
+- Tell me what validation was added
+- Tell me how to test extraction from pasted text
+- Tell me whether the app still runs
