@@ -188,7 +188,7 @@ function getWarnings(p: SimParams): Warning[] {
 
 function downloadCsv(data: SimPoint[], params: SimParams) {
   const meta = [
-    "# ChemAI Chemostat Simulation",
+    "# ChemEngAI Chemostat Simulation",
     `# mumax=${params.mumax} Ks=${params.Ks} D=${params.D} Sin=${params.Sin} Yxs=${params.Yxs}`,
     `# X0=${params.X0} S0=${params.S0} tFinal=${params.tFinal} dt=${params.dt}`,
     "",

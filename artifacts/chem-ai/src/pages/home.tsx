@@ -36,7 +36,7 @@ export default function Home() {
           Convert Scientific Literature into Simulation-Ready Model Packages
         </h1>
         <p className="text-xl text-muted-foreground max-w-2xl">
-          ChemAI Model Compiler is a research tool that converts scientific
+          ChemEngAI is a research tool that converts scientific
           literature and experimental notes into transparent, reproducible,
           simulation-ready engineering model packages.
         </p>
@@ -77,7 +77,7 @@ export default function Home() {
           <span className="font-medium text-foreground">NotebookLM</span> helps
           you read and chat with sources.{" "}
           <span className="font-medium text-foreground">
-            ChemAI Model Compiler
+            ChemEngAI
           </span>{" "}
           helps you{" "}
           <span className="text-primary font-medium">
@@ -100,7 +100,7 @@ export default function Home() {
           Industrial platforms optimize validated bioprocesses from experimental
           data.{" "}
           <span className="font-medium text-foreground">
-            ChemAI Model Compiler
+            ChemEngAI
           </span>{" "}
           helps researchers turn papers and notes into transparent model cards,
           equations, parameter tables, missing-information reports, and

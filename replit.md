@@ -29,14 +29,14 @@ See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and pa
 ## Artifacts
 
 - `artifacts/api-server` — Express 5 API at `/api`. Persists projects, source documents, extractions (model cards, equations, variables, parameters, assumptions). Seeds a chemostat/microalgae demo project on first boot.
-- `artifacts/chem-ai` — React + Vite web UI at `/`. ChemAI Model Compiler: ingest, extract, 9-tab model card view (Overview, Variables, Parameters, Equations, Assumptions, Missing Info, ODE Template, Reproducibility, Raw JSON), JSON export, simulation page.
+- `artifacts/chem-ai` — React + Vite web UI at `/`. ChemEngAI: ingest, extract, 10-tab model card view (Overview, Variables, Parameters, Equations, Assumptions, Missing Info, ODE Template, Reproducibility, Unit Check, Raw JSON), JSON export, simulation page.
 - `artifacts/mockup-sandbox` — design exploration only.
 
 ## Project Purpose
 
-**ChemAI Model Compiler** — a research workbench that converts scientific papers into simulation-ready model artifacts (equations, variables, parameters, ODE templates). Migrated from https://github.com/MehrzadJami/Serious-Tracker.
+**ChemEngAI** — a research workbench that converts scientific papers into simulation-ready model artifacts (equations, variables, parameters, ODE templates). Migrated from https://github.com/MehrzadJami/Serious-Tracker.
 
-## ChemAI extraction engine
+## ChemEngAI extraction engine
 
 Canonical contract: `artifacts/api-server/src/lib/extraction-schema.ts` (Zod) defines the strict JSON shape every extraction provider must return — `paper_title_or_topic`, `system_type`, `process_description`, `state_variables[]`, `parameters[]`, `equations[]`, `assumptions[]`, `limitations[]`, `model_card{...}`, with `confidence` on every list item.
 

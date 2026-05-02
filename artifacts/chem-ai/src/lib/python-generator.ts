@@ -117,7 +117,7 @@ export function generatePythonOdeTemplate(input: PythonGeneratorInput): string {
 
   // ── Header ────────────────────────────────────────────────────────────────
   parts.push(`${DIVIDER}
-# ChemAI Model Compiler — Generated Python ODE Template
+# ChemEngAI — Generated Python ODE Template
 ${DIVIDER}
 # Title       : ${title}
 # Project     : ${projectName}
