@@ -48,6 +48,7 @@ import {
   type ReproducibilityReport,
   type MissingSeverity,
 } from "@/lib/reproducibility";
+import { runUnitCheck, type UnitCheckReport, type UnitWarnSeverity } from "@/lib/unit-checker";
 
 // ─── Local raw-extraction passthrough types ────────────────────────────────────
 
@@ -386,6 +387,13 @@ function ModelCardDetailInner({
     [projectId, cardQuery_nonce(equations, variables, parameters)]
   );
 
+  // ── Unit & dimension check (memoized) ────────────────────────────────────
+  const unitReport = useMemo(
+    () => runUnitCheck(equations, variables, parameters, raw ?? null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters)]
+  );
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
       {/* ── Header ── */}
@@ -415,6 +423,22 @@ function ModelCardDetailInner({
             className={`text-[10px] font-mono ${scoreTextColor(report.overall_score)}`}
           >
             Repro: {report.overall_score}/100
+          </Badge>
+          {/* Unit check status badge in header */}
+          <Badge
+            variant="outline"
+            className={`text-[10px] font-mono ${
+              unitReport.unit_check_status === "pass"
+                ? "text-emerald-600 border-emerald-400"
+                : unitReport.unit_check_status === "warning"
+                ? "text-amber-600 border-amber-400"
+                : "text-red-600 border-red-400"
+            }`}
+          >
+            Units:{" "}
+            {unitReport.unit_check_status === "pass"
+              ? "✓ pass"
+              : `${unitReport.warnings.filter((w) => w.severity === "high").length}H / ${unitReport.warnings.filter((w) => w.severity === "medium").length}M`}
           </Badge>
         </div>
         <div className="flex items-start justify-between gap-4">
@@ -489,6 +513,14 @@ function ModelCardDetailInner({
           </TabsTrigger>
           <TabsTrigger value="reproducibility" data-testid="tab-reproducibility">
             Reproducibility
+          </TabsTrigger>
+          <TabsTrigger value="unit-check" data-testid="tab-unit-check">
+            Unit Check
+            {unitReport.warnings.filter((w) => w.severity === "high").length > 0 && (
+              <span className="ml-1 text-red-500 font-bold">
+                ({unitReport.warnings.filter((w) => w.severity === "high").length})
+              </span>
+            )}
           </TabsTrigger>
           <TabsTrigger value="raw" data-testid="tab-raw">
             Raw JSON
@@ -1030,6 +1062,159 @@ function ModelCardDetailInner({
               </ol>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ── Unit Check ── */}
+        <TabsContent value="unit-check" className="mt-6 space-y-4">
+          {/* Header card */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    {unitReport.unit_check_status === "pass" ? (
+                      <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                    ) : unitReport.unit_check_status === "warning" ? (
+                      <TriangleAlert className="h-5 w-5 text-amber-500" />
+                    ) : (
+                      <XCircle className="h-5 w-5 text-red-500" />
+                    )}
+                    Unit &amp; Dimension Check
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    <span className="italic font-medium text-muted-foreground">
+                      MVP heuristic unit checker
+                    </span>{" "}
+                    — flags obvious problems only. Not a full symbolic dimensional-analysis engine.
+                  </CardDescription>
+                </div>
+                <Badge
+                  className={`text-sm px-3 py-1 ${
+                    unitReport.unit_check_status === "pass"
+                      ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                      : unitReport.unit_check_status === "warning"
+                      ? "bg-amber-100 text-amber-800 border border-amber-300"
+                      : "bg-red-100 text-red-800 border border-red-300"
+                  }`}
+                >
+                  {unitReport.unit_check_status === "pass"
+                    ? "✓ Pass"
+                    : unitReport.unit_check_status === "warning"
+                    ? "⚠ Warning"
+                    : "✗ Fail"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {/* Summary counts */}
+              <div className="flex gap-4 flex-wrap text-sm">
+                {(["high", "medium", "low"] as UnitWarnSeverity[]).map((sev) => {
+                  const count = unitReport.warnings.filter((w) => w.severity === sev).length;
+                  const color =
+                    sev === "high"
+                      ? "text-red-600"
+                      : sev === "medium"
+                      ? "text-amber-600"
+                      : "text-slate-500";
+                  return (
+                    <span key={sev} className={`font-mono font-medium ${color}`}>
+                      {count} {sev}
+                    </span>
+                  );
+                })}
+                <span className="text-muted-foreground">
+                  · {unitReport.warnings.length} total
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Warnings list */}
+          {unitReport.warnings.length === 0 ? (
+            <Card>
+              <CardContent className="pt-8 pb-8 text-center">
+                <CheckCircle2 className="h-10 w-10 text-emerald-500 mx-auto mb-3" />
+                <p className="text-sm font-medium text-emerald-700">No unit issues found.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  All checked symbols have units, ODE derivative units are traceable, and no mixed time scales were detected.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            (["high", "medium", "low"] as UnitWarnSeverity[]).map((sev) => {
+              const group = unitReport.warnings.filter((w) => w.severity === sev);
+              if (group.length === 0) return null;
+              const groupColor =
+                sev === "high"
+                  ? "border-red-200 bg-red-50/40"
+                  : sev === "medium"
+                  ? "border-amber-200 bg-amber-50/40"
+                  : "border-slate-200 bg-slate-50/30";
+              const badgeColor =
+                sev === "high"
+                  ? "bg-red-100 text-red-700 border-red-300"
+                  : sev === "medium"
+                  ? "bg-amber-100 text-amber-700 border-amber-300"
+                  : "bg-slate-100 text-slate-600 border-slate-300";
+              const icon =
+                sev === "high" ? (
+                  <XCircle className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
+                ) : sev === "medium" ? (
+                  <TriangleAlert className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <Info className="h-4 w-4 text-slate-400 flex-shrink-0 mt-0.5" />
+                );
+              return (
+                <Card key={sev} className={`border ${groupColor}`}>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider">
+                      <Badge variant="outline" className={`text-[10px] px-2 ${badgeColor}`}>
+                        {sev}
+                      </Badge>
+                      {sev === "high"
+                        ? "High — must fix before simulation"
+                        : sev === "medium"
+                        ? "Medium — should verify"
+                        : "Low — minor / informational"}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {group.map((w, i) => (
+                      <div
+                        key={i}
+                        className="rounded-md border border-white/60 bg-white/70 dark:bg-background/50 p-3 space-y-1.5"
+                      >
+                        <div className="flex items-start gap-2">
+                          {icon}
+                          <p className="text-sm font-medium leading-snug">{w.message}</p>
+                        </div>
+                        {w.equation_or_symbol && (
+                          <p className="text-xs text-muted-foreground font-mono pl-6">
+                            Affected:{" "}
+                            <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
+                              {w.equation_or_symbol}
+                            </code>
+                          </p>
+                        )}
+                        {w.suggestion && (
+                          <p className="text-xs text-muted-foreground pl-6 leading-relaxed">
+                            <span className="font-medium text-foreground">Suggestion:</span>{" "}
+                            {w.suggestion}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+
+          {/* Footer note */}
+          <p className="text-xs text-muted-foreground text-center italic pt-2">
+            This checker applies heuristic rules to common chemical-engineering ODE models.
+            It cannot algebraically balance complex unit expressions — use a CAS or domain expert for definitive dimensional analysis.
+          </p>
         </TabsContent>
 
         {/* ── Raw JSON ── */}
