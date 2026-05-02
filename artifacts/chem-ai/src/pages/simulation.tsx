@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { Link } from "wouter";
+import { useGetModelCardByProject } from "@workspace/api-client-react";
 import {
   LineChart,
   Line,
@@ -291,6 +292,14 @@ function isComplete(p: Partial<SimParams>): p is SimParams {
 // ─── main page ────────────────────────────────────────────────────────────────
 
 export default function Simulation() {
+  const qp = new URLSearchParams(window.location.search);
+  const modelProjectId = Number(qp.get("projectId") ?? "");
+  const canUseModelData = Number.isFinite(modelProjectId) && modelProjectId > 0;
+  const modelCardQuery = useGetModelCardByProject(
+    canUseModelData ? modelProjectId : -1,
+    { query: { enabled: canUseModelData } },
+  );
+
   const [rawParams, setRawParams] = useState<Record<string, string>>(
     () =>
       Object.fromEntries(
@@ -300,6 +309,37 @@ export default function Simulation() {
   const [simData, setSimData] = useState<SimPoint[] | null>(null);
   const [hasRun, setHasRun] = useState(false);
   const [lastParams, setLastParams] = useState<SimParams | null>(null);
+  const [mode, setMode] = useState<"demo" | "model">("demo");
+
+  useEffect(() => {
+    const card = modelCardQuery.data;
+    if (!card?.parameters) return;
+    const pMap = new Map<string, string>();
+    for (const p of card.parameters) {
+      pMap.set(String(p.symbol).toLowerCase(), String(p.value ?? ""));
+    }
+    setRawParams((prev) => {
+      const next = { ...prev };
+      const setIf = (key: keyof SimParams, ...aliases: string[]) => {
+        for (const a of aliases) {
+          const v = pMap.get(a);
+          if (v && v.trim() !== "") {
+            next[key] = v;
+            return;
+          }
+        }
+      };
+      setIf("mumax", "mumax", "mu_max");
+      setIf("Ks", "ks");
+      setIf("D", "d");
+      setIf("Sin", "sin", "s_in");
+      setIf("Yxs", "yxs");
+      setIf("X0", "x0");
+      setIf("S0", "s0");
+      return next;
+    });
+    setMode("model");
+  }, [modelCardQuery.data]);
 
   const parsed = useMemo(() => toParams(rawParams), [rawParams]);
 
@@ -374,6 +414,10 @@ export default function Simulation() {
           <p className="text-sm text-muted-foreground">
             Chemostat / Monod kinetics — solved in-browser with 4th-order
             Runge-Kutta
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Mode: {mode === "model" ? "Model-derived parameters" : "Demo defaults"}
+            {mode === "demo" ? " (add ?projectId=<id> to use extracted params)" : ""}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">

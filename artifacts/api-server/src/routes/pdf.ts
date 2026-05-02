@@ -41,6 +41,7 @@ const router: IRouter = Router();
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB
 const MAX_PAGES = 200;
 const MIN_TEXT_CHARS = 30;
+const OCR_MIN_CHARS = 120;
 
 // base64 encoding inflates size by ~33 %; accept up to ceil(MAX_PDF_BYTES * 4/3)
 const MAX_BASE64_CHARS = Math.ceil(MAX_PDF_BYTES * (4 / 3));
@@ -56,6 +57,69 @@ const ParsePdfBody = z.object({
       "PDF exceeds the 20 MB limit. Upload a smaller file or paste the relevant sections manually.",
     ),
 });
+
+type PdfDiagnostics = {
+  totalChars: number;
+  pageCount: number;
+  perPageCharCounts: number[];
+  warnings: string[];
+  extractionMode: "default" | "normalized_whitespace" | "ocr_hook";
+};
+
+function computePerPageCharCounts(text: string, pageCount: number): number[] {
+  if (pageCount <= 1) return [text.length];
+  const pageBreaks = text.split(/\f|\n\s*\n\s*\n/g).map((s) => s.trim());
+  if (pageBreaks.length >= pageCount) {
+    return pageBreaks.slice(0, pageCount).map((s) => s.length);
+  }
+  const avg = Math.floor(text.length / pageCount);
+  const arr = Array.from({ length: pageCount }, () => avg);
+  arr[pageCount - 1] += text.length - avg * pageCount;
+  return arr;
+}
+
+async function extractWithFallback(pdfBuffer: Buffer): Promise<{
+  parseResult: PdfParseResult;
+  diagnostics: PdfDiagnostics;
+}> {
+  const warnings: string[] = [];
+
+  const first = await pdfParse(pdfBuffer);
+  let text = (first.text ?? "").trim();
+  let mode: PdfDiagnostics["extractionMode"] = "default";
+
+  if (text.length < OCR_MIN_CHARS) {
+    warnings.push(
+      "Low extracted text on first pass; retrying with normalized whitespace settings.",
+    );
+    const second = await pdfParse(pdfBuffer, {
+      normalizeWhitespace: true,
+      disableCombineTextItems: false,
+    });
+    const secondText = (second.text ?? "").trim();
+    if (secondText.length > text.length) {
+      text = secondText;
+      mode = "normalized_whitespace";
+    }
+  }
+
+  if (text.length < OCR_MIN_CHARS && process.env["ENABLE_PDF_OCR_HOOK"] === "true") {
+    warnings.push(
+      "Text remains low after parser fallback. OCR hook is enabled, but OCR provider is not configured in this build.",
+    );
+    mode = "ocr_hook";
+  }
+
+  const parseResult: PdfParseResult = { text, numpages: first.numpages };
+  const diagnostics: PdfDiagnostics = {
+    totalChars: text.length,
+    pageCount: first.numpages,
+    perPageCharCounts: computePerPageCharCounts(text, first.numpages),
+    warnings,
+    extractionMode: mode,
+  };
+  return { parseResult, diagnostics };
+}
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -94,8 +158,11 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
 
   // Parse the PDF
   let parseResult: PdfParseResult;
+  let diagnostics: PdfDiagnostics;
   try {
-    parseResult = await pdfParse(pdfBuffer);
+    const out = await extractWithFallback(pdfBuffer);
+    parseResult = out.parseResult;
+    diagnostics = out.diagnostics;
   } catch (err) {
     req.log.warn(
       { err: err instanceof Error ? err.message : String(err) },
@@ -142,6 +209,7 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
     pageCount: parseResult.numpages,
     wordCount,
     charCount: text.length,
+    diagnostics,
   });
 });
 
