@@ -29,7 +29,7 @@ export interface AnalysisVariable {
 export interface AnalysisParameter {
   id: number;
   symbol: string;
-  value?: string | null | undefined;
+  value?: number | string | null | undefined;
   unit?: string | null | undefined;
   confidence: string;
   sourceQuote: string;

@@ -1,0 +1,28 @@
+# Local PostgreSQL for development outside Replit.
+# Replit users: the built-in PostgreSQL integration is already configured —
+# you do not need this file.
+#
+# Usage:
+#   docker compose up -d          # start Postgres in the background
+#   docker compose down           # stop (data is preserved)
+#   docker compose down -v        # stop and delete all data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: chemengai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chemengai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

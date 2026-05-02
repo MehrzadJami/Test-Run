@@ -105,9 +105,33 @@
 
 ---
 
+### M11 — README & Documentation
+- `README.md` — 14-section product README (honest tone, no exaggeration)
+- `docs/ARCHITECTURE.md` — monorepo structure, data flow, provider abstraction, proxy routing
+- `docs/API.md` — full endpoint reference with request/response shapes and smoke tests
+- `docs/LOCAL_SETUP.md` — step-by-step setup for local dev and Replit (updated in M12)
+- `docs/ROADMAP.md` — M1–M11 completed detail, M12–M17 planned
+- `docs/MODEL_EXTRACTION_SCHEMA.md` — ExtractionResultSchema field-by-field reference
+
+### M12 — Portability & Development Handoff
+- `.env.example` — all required/optional vars documented, no real secrets
+- `docker-compose.yml` — single-command local Postgres (no install required)
+- `lib/db/package.json` — added `generate`, `migrate`, `studio`, `seed` scripts
+- `lib/db/drizzle.config.ts` — dotenv loaded automatically; `out` dir for migration files
+- `lib/db/src/seed.ts` — standalone seed script (runnable without the API server)
+- `GET /api/export` — full DB export as JSON (all projects, extractions, model cards)
+- `scripts/src/export-data.ts` — CLI: export all data to JSON file (no server needed)
+- `scripts/src/import-data.ts` — CLI: import from exported JSON into a fresh DB
+- `scripts/package.json` — added export-data and import-data scripts + `@workspace/db` dep
+- `.gitignore` — added `.env`, `.env.local`, `.env.*.local`
+- `docs/LOCAL_SETUP.md` — rewritten: correct local ports, Docker section, data export section, correct script names, Vite proxy tip
+- No hardcoded localhost/Replit URLs in source code; Replit plugins already gated on `REPL_ID`
+
+---
+
 ## ⚡ In Progress / Planned
 
-### M11 is complete — see Done section above
+### M12 is complete — see Done section above
 
 ### Real AI Providers
 - Provider interface is ready — `getActiveProvider()` factory is wired

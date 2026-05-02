@@ -5,107 +5,186 @@
 | Requirement | Minimum version | Notes |
 |---|---|---|
 | Node.js | 20 | LTS recommended |
-| pnpm | 9 | `npm install -g pnpm` |
-| PostgreSQL | 14 | Local install or Docker |
+| pnpm | 9 | `npm install -g pnpm@9` |
+| PostgreSQL | 14 | Local install **or** Docker (see below) |
 
 ---
 
-## 1. Install dependencies
+## 1. Clone the repo
+
+```bash
+git clone https://github.com/MehrzadJami/Test-Run.git
+cd Test-Run
+```
+
+---
+
+## 2. Install dependencies
 
 ```bash
 pnpm install
 ```
 
-This installs all workspace packages — `@workspace/db`, `@workspace/api-spec`, `@workspace/api-zod`, `@workspace/api-client-react`, `@workspace/api-server`, `@workspace/chem-ai`.
+This installs all workspace packages: `@workspace/db`, `@workspace/api-spec`,
+`@workspace/api-zod`, `@workspace/api-client-react`, `@workspace/api-server`,
+`@workspace/chem-ai`, `@workspace/scripts`.
 
 ---
 
-## 2. Configure environment variables
-
-Copy the example and fill in values:
+## 3. Configure environment variables
 
 ```bash
 cp .env.example .env
 ```
 
-Minimum required:
+Open `.env` and fill in your values. Minimum required:
 
 ```env
-DATABASE_URL=postgresql://localhost:5432/chemengai
-SESSION_SECRET=change-me-in-production
+DATABASE_URL=postgresql://postgres:password@localhost:5432/chemengai
+SESSION_SECRET=change-me-to-a-long-random-secret
 ```
 
-Optional (no AI providers are needed for the demo):
+Generate a strong session secret:
 
-```env
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=...
+```bash
+openssl rand -hex 32
 ```
 
-Do not commit `.env` to version control.
+AI provider keys are optional. Leave them blank to run in **demo/mock mode** —
+the app is fully functional without them.
+
+**Never commit `.env` to version control.** It is already in `.gitignore`.
 
 ---
 
-## 3. Database setup
+## 4. Start PostgreSQL
+
+### Option A — Docker (recommended for local dev, no install required)
 
 ```bash
-# Apply migrations (creates all tables)
-pnpm --filter @workspace/db run migrate
+docker compose up -d
+```
 
-# Seed the demo project (Andrews 1968 chemostat, projectId=1)
+This starts a PostgreSQL 16 container on `localhost:5432` with the credentials
+from the default `.env.example`. Stop it with `docker compose down`.
+
+### Option B — Local PostgreSQL install
+
+Create the database manually:
+
+```bash
+createdb chemengai
+```
+
+Or via `psql`:
+
+```sql
+CREATE DATABASE chemengai;
+```
+
+---
+
+## 5. Apply the database schema
+
+The project uses Drizzle ORM. Choose one of two approaches:
+
+### Schema push (fast, for development)
+
+Pushes the TypeScript schema directly to the database — no migration files needed.
+Ideal for local dev and fresh databases.
+
+```bash
+pnpm --filter @workspace/db run push
+```
+
+### Migration-based (for production / tracking changes)
+
+Generates SQL migration files in `lib/db/drizzle/`, then applies them.
+Use this when you need a reproducible audit trail of schema changes.
+
+```bash
+# Generate migration files from the current schema
+pnpm --filter @workspace/db run generate
+
+# Apply pending migrations
+pnpm --filter @workspace/db run migrate
+```
+
+After a schema change, always run `generate` then `migrate` (or `push` for dev).
+
+---
+
+## 6. Seed demo data
+
+```bash
 pnpm --filter @workspace/db run seed
 ```
 
-To generate a new migration after schema changes:
-
-```bash
-pnpm --filter @workspace/db run generate
-pnpm --filter @workspace/db run migrate
-```
-
-To open Drizzle Studio (visual DB browser):
-
-```bash
-pnpm --filter @workspace/db run studio
-```
+This inserts the Andrews 1968 chemostat demo project (idempotent — safe to run
+multiple times). The API server also seeds automatically on first boot, so this
+step is optional if you plan to start the server immediately.
 
 ---
 
-## 4. Run services
+## 7. Run services
 
-Each service runs independently. Open two terminal tabs.
+Open two terminal tabs.
 
-**Tab 1 — API server** (serves `/api`)
-
-```bash
-pnpm --filter @workspace/api-server run dev
-```
-
-The server starts on the port assigned by the `PORT` environment variable (default `8080`). Logs are Pino JSON, pretty-printed in development.
-
-**Tab 2 — Frontend** (serves `/`)
+**Tab 1 — API server** (serves `/api`, default port 8080)
 
 ```bash
-pnpm --filter @workspace/chem-ai run dev
+PORT=8080 BASE_PATH=/api pnpm --filter @workspace/api-server run dev
 ```
 
-Vite starts on its own port. In Replit, both services are automatically routed through the shared proxy — you access everything through `localhost:80` or the preview pane URL.
+**Tab 2 — Frontend** (serves `/`, default port 5173)
+
+```bash
+PORT=5173 BASE_PATH=/ pnpm --filter @workspace/chem-ai run dev
+```
+
+> **Note on ports:** Outside Replit, the two services run on separate ports and
+> there is no shared reverse proxy. The frontend makes API calls to `/api/...`
+> — for local dev you can either:
+>
+> a. Run a local nginx/caddy proxy that routes `/api` → port 8080 and `/` →
+>    port 5173 (recommended for parity with production).
+>
+> b. Add a Vite proxy in `vite.config.ts` for local-only dev (see below).
+
+### Optional: Vite proxy for local dev
+
+Add to `artifacts/chem-ai/vite.config.ts` inside `server: { ... }` — **do not
+commit this change**:
+
+```ts
+proxy: {
+  "/api": "http://localhost:8080",
+},
+```
+
+Then the frontend's API calls will be forwarded to the API server automatically.
 
 ---
 
-## 5. Verify the setup
+## 8. Verify the setup
 
 ```bash
-# API health
-curl localhost:80/api/healthz
+# API health (replace 8080 with your API port)
+curl http://localhost:8080/api/healthz
 # → {"status":"ok"}
 
-# List projects (should include seeded demo)
-curl localhost:80/api/projects
+# List projects (should include the seeded chemostat demo)
+curl http://localhost:8080/api/projects
 # → [{"id":1,"name":"Chemostat — microalgae bioreactor (Andrews 1968)",...}]
+
+# Full data export
+curl http://localhost:8080/api/export
+# → {"exportedAt":"...","version":"1","projectCount":1,"data":[...]}
 ```
 
-Open the browser at `http://localhost:80/`. The landing page should load and "Connected / Demo Mode" should appear in the sidebar footer.
+Open the frontend at `http://localhost:5173/` (or whatever port Vite reports).
+The landing page should load and "Connected / Demo Mode" should appear in the
+sidebar footer.
 
 ---
 
@@ -115,7 +194,7 @@ In Replit, the environment is configured automatically:
 
 - `DATABASE_URL` is set when the PostgreSQL integration is added
 - `SESSION_SECRET` is set as a Replit secret
-- `PORT` is injected per-service by the workflow runner
+- `PORT` and `BASE_PATH` are injected per-service by the workflow runner
 - Both workflows (`API Server`, `web`) are registered in `.replit-artifact/`
 
 To start the workflows:
@@ -128,13 +207,64 @@ Workflow: "artifacts/chem-ai: web"
 Command:  pnpm --filter @workspace/chem-ai run dev
 ```
 
-Do not run `pnpm dev` at the workspace root — there is no root `dev` script by design.
+Do not run `pnpm dev` at the workspace root — there is no root `dev` script by
+design.
+
+Access everything through `localhost:80` or the Replit preview pane — the
+shared reverse proxy handles routing automatically.
 
 ---
 
-## OpenAPI Codegen
+## Data export and import
 
-If you change the OpenAPI spec (`lib/api-spec/openapi.yaml`), regenerate the client code:
+### Export all data to JSON
+
+**Via the API** (server must be running):
+
+```bash
+curl http://localhost:8080/api/export -o my-backup.json
+```
+
+**Via the CLI script** (works without the server):
+
+```bash
+pnpm --filter @workspace/scripts run export-data
+# → writes chemengai-export-<timestamp>.json
+
+# Custom output path:
+pnpm --filter @workspace/scripts run export-data -- --out /path/to/backup.json
+```
+
+### Import data into a fresh database
+
+```bash
+# Apply schema first
+pnpm --filter @workspace/db run push
+
+# Import from export file
+pnpm --filter @workspace/scripts run import-data -- --in chemengai-export-<timestamp>.json
+```
+
+If the database already has data, add `--force` to import anyway (existing
+projects with the same name are skipped).
+
+---
+
+## Drizzle Studio (visual DB browser)
+
+```bash
+pnpm --filter @workspace/db run studio
+```
+
+Opens the Drizzle web UI at `https://local.drizzle.studio/` — shows all tables
+and lets you browse/edit rows.
+
+---
+
+## OpenAPI codegen
+
+If you change the OpenAPI spec (`lib/api-spec/openapi.yaml`), regenerate the
+client code:
 
 ```bash
 pnpm --filter @workspace/api-spec run codegen
@@ -161,23 +291,32 @@ pnpm --filter @workspace/api-server exec tsc --noEmit
 pnpm --filter @workspace/chem-ai exec tsc --noEmit
 ```
 
-Pre-existing type errors in `@workspace/api-client-react` barrel exports are known and do not affect the build.
+Pre-existing type errors in `@workspace/api-client-react` barrel exports are
+known and do not affect the build.
 
 ---
 
 ## Troubleshooting
 
-**`ECONNREFUSED` on API calls from the frontend**
-The API server is not running or the proxy is not active. Start both workflow services and verify `curl localhost:80/api/healthz` returns 200.
+**`ECONNREFUSED` when the frontend calls the API**
+The API server is not running, or for local dev outside Replit you need a Vite
+proxy (see step 7). Verify `curl http://localhost:8080/api/healthz` returns 200.
 
 **`relation "projects" does not exist`**
-Migrations have not been applied. Run `pnpm --filter @workspace/db run migrate`.
+The schema has not been applied. Run `pnpm --filter @workspace/db run push`.
 
-**Blank preview pane in Replit**
-Check the `chem-ai: web` workflow is running. Vite must have `server.allowedHosts: true` set (already configured). Hard-refresh the browser tab.
+**`DATABASE_URL must be set`**
+The `.env` file is missing or not loaded. Check that `.env` exists and contains
+`DATABASE_URL`. The `dotenv/config` import in `drizzle.config.ts` and
+`lib/db/src/seed.ts` loads `.env` automatically.
 
 **`pnpm: command not found`**
 Install pnpm globally: `npm install -g pnpm@9`.
 
 **Port collision**
-Each artifact must read `PORT` from the environment. Do not hard-code port numbers in Vite or Express config.
+Each service reads `PORT` from the environment. Do not hard-code port numbers
+in Vite or Express config.
+
+**Blank preview pane in Replit**
+Check that the `chem-ai: web` workflow is running. Vite is configured with
+`server.allowedHosts: true`. Hard-refresh the browser tab.

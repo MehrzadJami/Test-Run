@@ -99,6 +99,7 @@ Pure in-browser RK4 ODE solver for Monod chemostat model (no server).
 | POST | `/api/projects/:id/extractions` | Run extraction |
 | GET | `/api/projects/:id/model-card` | Get latest model card |
 | GET | `/api/projects/:id/export` | Full project JSON export |
+| GET | `/api/export` | Export ALL projects as one JSON dump |
 
 ## Environment Variables
 
@@ -107,8 +108,11 @@ Pure in-browser RK4 ODE solver for Monod chemostat model (no server).
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `SESSION_SECRET` | Yes (prod) | Session signing secret |
 | `PORT` | No | Injected by Replit per-service |
+| `BASE_PATH` | No | Injected by Replit per-service |
 | `OPENAI_API_KEY` | No | Enables OpenAI provider (future) |
 | `GEMINI_API_KEY` | No | Enables Gemini provider (future) |
+
+See `.env.example` for the full list with descriptions.
 
 ## Documentation
 
@@ -121,9 +125,9 @@ Pure in-browser RK4 ODE solver for Monod chemostat model (no server).
 
 ## Milestone Status
 
-M1 Scaffold ✅ · M2 Extraction Engine ✅ · M3 DB Schema ✅ · M4 Model Card UI ✅ · M5 Structured Tabs ✅ · M6 Missing Info ✅ · M7 Reproducibility Score ✅ · M8 Unit Check ✅ · M8b Python ODE Template ✅ · M9 Model Package ZIP ✅ · M10 UI Polish + Demo ✅ · M11 Documentation ✅
+M1 Scaffold ✅ · M2 Extraction Engine ✅ · M3 DB Schema ✅ · M4 Model Card UI ✅ · M5 Structured Tabs ✅ · M6 Missing Info ✅ · M7 Reproducibility Score ✅ · M8 Unit Check ✅ · M8b Python ODE Template ✅ · M9 Model Package ZIP ✅ · M10 UI Polish + Demo ✅ · M11 Documentation ✅ · M12 Portability & Handoff ✅
 
-Next: M12 Real AI Providers (OpenAI GPT-4o + Gemini 1.5 Pro structured output)
+Next: M13 Real AI Providers (OpenAI GPT-4o + Gemini 1.5 Pro structured output)
 
 ## GitHub
 

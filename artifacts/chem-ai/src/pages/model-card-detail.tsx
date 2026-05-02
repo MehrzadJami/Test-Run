@@ -368,7 +368,7 @@ function ModelCardDetailInner({
   };
   equations: { id: number; latex: string; description: string; sourceQuote: string }[];
   variables: { id: number; symbol: string; name: string; unit?: string | null; role: string; sourceQuote: string }[];
-  parameters: { id: number; symbol: string; value?: string | null; unit?: string | null; confidence: string; sourceQuote: string }[];
+  parameters: { id: number; symbol: string; value?: number | string | null; unit?: string | null; confidence: string; sourceQuote: string }[];
   assumptionItems: { id: number; text: string; kind: string }[];
   limitationItems: { id: number; text: string; kind: string }[];
   raw: RawExtraction | null | undefined;
