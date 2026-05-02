@@ -2,7 +2,6 @@ import { Link, useLocation } from "wouter";
 import { ConnectionStatus } from "./connection-status";
 import { useTheme } from "./ThemeProvider";
 import { 
-  FlaskConical, 
   LayoutDashboard, 
   Library, 
   ActivitySquare, 
@@ -37,9 +36,14 @@ export function Sidebar() {
     <>
       {/* Mobile Toggle */}
       <div className="md:hidden fixed top-0 left-0 right-0 h-16 border-b border-border bg-background flex items-center justify-between px-4 z-50">
-        <Link href="/" className="flex items-center gap-2 text-primary font-bold text-lg">
-          <FlaskConical className="w-6 h-6" />
-          <span>ChemAI</span>
+        <Link href="/">
+          <div className="bg-slate-900 rounded-xl px-3 py-2 dark:bg-transparent dark:px-0 dark:py-0">
+            <img
+              src="/logo.png"
+              alt="ChemEngAI"
+              className="h-7 w-auto object-contain"
+            />
+          </div>
         </Link>
         <Button variant="ghost" size="icon" onClick={() => setIsOpen(!isOpen)}>
           {isOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
@@ -52,10 +56,15 @@ export function Sidebar() {
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         md:translate-x-0 md:static md:h-screen
       `}>
-        <div className="h-16 flex items-center px-6 border-b border-border">
-          <Link href="/" className="flex items-center gap-2 text-primary font-bold text-xl hover:opacity-90 transition-opacity">
-            <FlaskConical className="w-6 h-6" />
-            <span>ChemAI</span>
+        <div className="h-16 flex items-center px-4 border-b border-border">
+          <Link href="/" className="hover:opacity-90 transition-opacity">
+            <div className="bg-slate-900 rounded-xl px-3 py-2 dark:bg-transparent dark:px-0 dark:py-0">
+              <img
+                src="/logo.png"
+                alt="ChemEngAI"
+                className="h-8 w-auto object-contain"
+              />
+            </div>
           </Link>
         </div>
 
