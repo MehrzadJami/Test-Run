@@ -88,6 +88,17 @@
 - README.md embeds repro score, unit check status, all gaps, and how-to-run instructions
 - source_excerpt.txt: deduplicated verbatim source quotes — the traceability record
 
+### M10 — UI Polish & Demo Readiness
+- **Landing page** — bold hero with teal "Simulation-Ready" highlight, "View Demo Model" CTA, amber scientific accuracy callout, NotebookLM side-by-side comparison card, "not a black-box optimizer" section, numbered core workflow cards, example-output stat tiles (repro score, package count, Python, unit check), "Open demo model card" link
+- **Dashboard** — color-coded stat cards with left accent borders (teal/violet/teal), animated skeleton loading rows, icon + retry button error state, clean empty state with CTA
+- **New Extraction** — prominent "Load a demo source text" panel with two pre-fill buttons: Monod Chemostat (Andrews 1968) and Aerobic Bioreactor O₂ transfer; realistic full-length methodology source texts; character counter; "What gets extracted" tip box
+- **Exports** — full rewrite: all buttons now active and linked; green "Available" badges; 4 export cards (Model Package ZIP, Python ODE Template, CSV Tables, Simulation CSV + Raw JSON); explanation of client-side generation
+- **Model Cards** — animated skeleton loading, better empty state with library icon + CTA, search no-results state with clear button, result count badge
+- **Simulation** — already polished; left unchanged
+- **Model Card Detail** — already polished; left unchanged
+- Scientific accuracy note added to landing page (required per spec, honest wording)
+- No exaggerated claims: "digital twin" and "guaranteed optimization" language absent throughout
+
 ### Canvas Kanban Board
 - Visual Kanban built directly on the Replit canvas (27 shapes)
 - 3 columns: Done · In Progress / Planned · Future Ideas
@@ -95,6 +106,8 @@
 ---
 
 ## ⚡ In Progress / Planned
+
+### M10 is complete — see Done section above
 
 ### Real AI Providers
 - Provider interface is ready — `getActiveProvider()` factory is wired
