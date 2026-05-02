@@ -107,7 +107,7 @@
 
 ## ⚡ In Progress / Planned
 
-### M10 is complete — see Done section above
+### M11 is complete — see Done section above
 
 ### Real AI Providers
 - Provider interface is ready — `getActiveProvider()` factory is wired

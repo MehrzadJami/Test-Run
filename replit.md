@@ -4,6 +4,8 @@
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
 
+**Project:** ChemEngAI Model Compiler — turns scientific literature and experimental notes into transparent, reproducible, simulation-ready engineering model packages.
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
@@ -14,75 +16,114 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Frontend**: React + Vite + Tailwind CSS 4 + shadcn/ui + wouter + TanStack Query + Recharts
+- **Exports**: JSZip (client-side 14-file model package ZIP)
+- **Logging**: Pino (structured JSON, API server only)
 
 ## Key Commands
 
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/db run migrate` — apply DB migrations
+- `pnpm --filter @workspace/db run seed` — seed demo project (Andrews 1968 chemostat)
+- `pnpm --filter @workspace/db run studio` — Drizzle Studio DB browser
+- `pnpm --filter @workspace/api-server run dev` — run API server
+- `pnpm --filter @workspace/chem-ai run dev` — run frontend
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+Smoke test: `curl localhost:80/api/healthz` — all requests go through the shared proxy at `localhost:80`, never directly to service ports.
 
 ## Artifacts
 
-- `artifacts/api-server` — Express 5 API at `/api`. Persists projects, source documents, extractions (model cards, equations, variables, parameters, assumptions). Seeds a chemostat/microalgae demo project on first boot.
-- `artifacts/chem-ai` — React + Vite web UI at `/`. ChemEngAI: ingest, extract, 10-tab model card view (Overview, Variables, Parameters, Equations, Assumptions, Missing Info, ODE Template, Reproducibility, Unit Check, Raw JSON), JSON export, simulation page.
+- `artifacts/api-server` — Express 5 API at `/api`. Projects, source documents, extractions (model cards, equations, variables, parameters, assumptions). Seeds demo on first boot.
+- `artifacts/chem-ai` — React + Vite web UI at `/`. Full ChemEngAI frontend: landing page, dashboard, new extraction, model cards list, 10-tab model card detail, in-browser RK4 simulation, exports guide.
 - `artifacts/mockup-sandbox` — design exploration only.
 
-## Project Purpose
+## Shared Libraries
 
-**ChemEngAI** — a research workbench that converts scientific papers into simulation-ready model artifacts (equations, variables, parameters, ODE templates). Migrated from https://github.com/MehrzadJami/Serious-Tracker.
+| Package | Role |
+|---|---|
+| `@workspace/db` | Drizzle client, all table definitions, migrations |
+| `@workspace/api-spec` | OpenAPI YAML + Orval codegen config |
+| `@workspace/api-zod` | Zod request/response schemas (used in routes) |
+| `@workspace/api-client-react` | Generated TanStack Query hooks |
 
-## ChemEngAI extraction engine
+## Extraction Engine
 
-Canonical contract: `artifacts/api-server/src/lib/extraction-schema.ts` (Zod) defines the strict JSON shape every extraction provider must return — `paper_title_or_topic`, `system_type`, `process_description`, `state_variables[]`, `parameters[]`, `equations[]`, `assumptions[]`, `limitations[]`, `model_card{...}`, with `confidence` on every list item.
+Canonical contract: `artifacts/api-server/src/lib/extraction-schema.ts` (Zod) — every extraction provider must return data matching `ExtractionResultSchema`: `paper_title_or_topic`, `system_type`, `process_description`, `state_variables[]`, `parameters[]`, `equations[]`, `assumptions[]`, `limitations[]`, `model_card{}`, with `confidence` on every item.
 
-Engine: `artifacts/api-server/src/lib/extractor.ts` exposes:
-- `ExtractionProvider` interface + `getActiveProvider()` factory (today: always `MockProvider`; future: picks OpenAI / Gemini based on `OPENAI_API_KEY` / `GEMINI_API_KEY` — never hardcoded).
-- `runExtraction(sourceText)` — single entry point. Validates input (≥30 chars), calls the provider, re-validates the provider's output against `ExtractionResultSchema`. Throws `ExtractionInputError` (400) or `ExtractionProviderError` (502).
-- `mapExtractionToDb(result)` — pure mapper from the rich validated result onto the existing DB row shapes.
+Engine: `artifacts/api-server/src/lib/extractor.ts`
+- `ExtractionProvider` interface + `getActiveProvider()` factory — today: always `MockProvider`; future: picks OpenAI/Gemini from `OPENAI_API_KEY`/`GEMINI_API_KEY`
+- `runExtraction(text)` — validates input (≥30 chars), calls provider, re-validates output against schema. Throws `ExtractionInputError` (400) or `ExtractionProviderError` (502)
+- `mapExtractionToDb(result)` — pure mapper from validated result to DB row shapes
 
-## M4 — Simulation page (artifacts/chem-ai/src/pages/simulation.tsx)
+## DB Schema (lib/db/src/schema)
 
-Pure in-browser RK4 ODE solver for the Monod chemostat model (no server, no arbitrary code execution).
+`projects → source_documents → extractions → { equations, variables, parameters, assumptions }`
 
-- **Model**: μ = μmax·S/(Ks+S), dX/dt = (μ-D)·X, dS/dt = D·(Sin-S) - (1/Yxs)·μ·X
-- **Solver**: 4th-order Runge-Kutta, capped at 50 000 steps, decimated to ≤ 1 000 plot points
-- **Chart**: Recharts LineChart with teal/orange X and S traces + dashed reference lines at analytical steady state
+All extraction children cascade on delete. `assumptions.kind = "assumption" | "limitation"`. `extractions.raw_extraction_json` (JSONB, nullable) preserves the full validated payload alongside normalized rows.
 
-## DB schema (lib/db/src/schema)
+## Client-Side Analysis
 
-`projects → source_documents → extractions → { equations, variables, parameters, assumptions }`. All `extractions`-children cascade on delete. `assumptions.kind` is `assumption | limitation`.
+All run in-browser after model card loads (no server round-trip):
+- `analyzeReproducibility()` — 0–100 score across 8 sub-dimensions (`lib/reproducibility.ts`)
+- `runUnitCheck()` — dimensional heuristic check across all equation terms (`lib/unit-check.ts`)
+- `generatePythonOdeTemplate()` — Python scipy.integrate scaffold (`lib/python-generator.ts`)
+- `generateModelPackage()` — 14-file model package assembler (`lib/package-generator.ts`)
 
-`extractions.raw_extraction_json` (JSONB, nullable) preserves the full validated `ExtractionResultSchema` payload alongside the normalized rows.
+## Simulation Page (simulation.tsx)
 
-## M6 — Reproducibility Analysis (artifacts/chem-ai/src/lib/reproducibility.ts)
+Pure in-browser RK4 ODE solver for Monod chemostat model (no server).
+- Model: μ = μmax·S/(Ks+S), dX/dt = (μ-D)·X, dS/dt = D·(Sin-S) - (1/Yxs)·μ·X
+- Solver: 4th-order Runge-Kutta, capped at 50 000 steps, decimated to ≤ 1 000 plot points
+- Analytical steady-state dashed reference lines on chart
+- Download CSV button after simulation runs
 
-Pure client-side analysis engine (no server, no AI). Called from `model-card-detail.tsx` via `useMemo` on the already-fetched card data.
+## Demo Workflow
 
-- **Input**: normalized DB rows (equations, variables, parameters, assumptions) + `raw_extraction_json` passthrough
-- **Fallback**: gracefully degrades when `raw_extraction_json` is null — uses normalized table data only
-- **Checks**: 13+ rule-based checks across equations, parameters, units, initial conditions, symbol cross-reference, gas-transfer, yield coefficients, Henry's law, kinetic constants
-- **Scores** (each 0–100): equations completeness (25%), parameters completeness (25%), units completeness (20%), initial conditions (20%), source traceability (10%)
-- **Overall**: weighted average of the five sub-scores
-- **Readiness**: `ready` (≥75 overall, 0 criticals), `partial` (≥40 overall, ≤1 critical), `not_ready` otherwise
-- **Output**: `ReproducibilityReport` — overall score, 5 sub-scores, readiness status, main blockers, `MissingItem[]` (severity-sorted: critical → warning → info), recommended next steps
-- **UI**: "Reproducibility" tab (9th tab on model card), score badge in page header, score breakdown bars, readiness badge, blocker list, missing items list, next steps
+1. Navigate to `/` — "View Demo Model" → `/model-cards/1` (Andrews 1968 chemostat, repro 100/100)
+2. Navigate to `/new` — click "Monod Chemostat (Andrews 1968)" to pre-fill source text, then "Extract Model"
+3. Navigate to `/simulation` — run RK4 sim, download CSV
+4. On any model card — "Download Package" button creates 14-file ZIP client-side
 
-## Roadmap
+## API Routes
 
-- **Milestone 1 — Skeleton ✅**: Full-stack scaffold, sidebar nav, six pages, demo data, health check.
-- **Milestone 2 — AI extraction layer**: Provider interface, mock + OpenAI + Gemini — wire real keys when ready.
-- **Milestone 3 — Editing flows**: Inline edits to variables and parameters with optimistic UI.
-- **Milestone 4 — Model Card polish ✅**: 9-tab professional model card, product name, landing page positioning.
-- **Milestone 5 — Simulation ✅**: RK4 integrator, Recharts time-series chart, full parameter inputs.
-- **Milestone 6 — Reproducibility ✅**: Missing information detector, reproducibility score, simulation readiness badge.
-- **Milestone 7 — Unit Check ✅**: MVP heuristic unit & dimension checker, 10 checks, Unit Check tab on model card, status badge in header.
-- **Milestone 8 — Python ODE Template ✅**: Client-side generator (`python-generator.ts`), rich ODE Template tab, download as `model_template.py`, readiness + unit-check warning banners.
-- **Remaining**: Real AI providers (M2), Exports page (Markdown/CSV), push back to GitHub.
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/healthz` | Health check |
+| GET | `/api/projects` | List all projects with counts |
+| POST | `/api/projects` | Create project |
+| GET | `/api/projects/:id` | Get project + sources + extractions |
+| DELETE | `/api/projects/:id` | Delete project (cascade) |
+| POST | `/api/projects/:id/sources` | Add source document |
+| POST | `/api/projects/:id/extractions` | Run extraction |
+| GET | `/api/projects/:id/model-card` | Get latest model card |
+| GET | `/api/projects/:id/export` | Full project JSON export |
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `SESSION_SECRET` | Yes (prod) | Session signing secret |
+| `PORT` | No | Injected by Replit per-service |
+| `OPENAI_API_KEY` | No | Enables OpenAI provider (future) |
+| `GEMINI_API_KEY` | No | Enables Gemini provider (future) |
+
+## Documentation
+
+- `README.md` — full product README (14 sections)
+- `docs/ARCHITECTURE.md` — monorepo structure, data flow, provider abstraction
+- `docs/API.md` — full endpoint reference with request/response shapes
+- `docs/LOCAL_SETUP.md` — local dev setup, Replit setup, troubleshooting
+- `docs/ROADMAP.md` — M1–M11 completed, M12–M17 planned
+- `docs/MODEL_EXTRACTION_SCHEMA.md` — ExtractionResultSchema field-by-field reference
+
+## Milestone Status
+
+M1 Scaffold ✅ · M2 Extraction Engine ✅ · M3 DB Schema ✅ · M4 Model Card UI ✅ · M5 Structured Tabs ✅ · M6 Missing Info ✅ · M7 Reproducibility Score ✅ · M8 Unit Check ✅ · M8b Python ODE Template ✅ · M9 Model Package ZIP ✅ · M10 UI Polish + Demo ✅ · M11 Documentation ✅
+
+Next: M12 Real AI Providers (OpenAI GPT-4o + Gemini 1.5 Pro structured output)
 
 ## GitHub
 
