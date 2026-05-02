@@ -69,9 +69,13 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
   }
 
   // Decode base64 → Buffer
+  // Accept both raw base64 and full data URLs for robustness.
+  const raw = body.data.base64.trim();
+  const normalizedBase64 = raw.includes(",") ? (raw.split(",")[1] ?? "") : raw;
+
   let pdfBuffer: Buffer;
   try {
-    pdfBuffer = Buffer.from(body.data.base64, "base64");
+    pdfBuffer = Buffer.from(normalizedBase64, "base64");
   } catch {
     res.status(400).json({
       error: "Invalid base64 data. Please try uploading the file again.",
