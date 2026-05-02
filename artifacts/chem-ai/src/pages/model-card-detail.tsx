@@ -34,24 +34,52 @@ import {
   Download,
   Sparkles,
   Play,
+  Info,
 } from "lucide-react";
-
-// ---------- raw extraction passthrough types ----------
-//
-// `rawExtractionJson` is emitted by the API as an opaque object (any provider
-// output that satisfied the canonical ExtractionResultSchema on the server).
-// We re-state the shape here for read-only display; if the field is null —
-// e.g. legacy extractions created before the column existed — we fall back
-// to the normalized tables.
 
 type Confidence = "high" | "medium" | "low";
 
-type RawEquation = {
-  label?: string;
+type RawStateVariable = {
+  symbol?: string;
+  name?: string;
+  meaning?: string;
+  unit?: string;
+  role?: string;
+  source_context?: string;
   confidence?: Confidence;
 };
-type RawAssumption = { confidence?: Confidence };
-type RawLimitation = { confidence?: Confidence };
+
+type RawParameter = {
+  symbol?: string;
+  name?: string;
+  value?: string;
+  unit?: string;
+  source_context?: string;
+  confidence?: Confidence;
+};
+
+type RawEquation = {
+  label?: string;
+  equation_latex?: string;
+  equation_plaintext?: string;
+  meaning?: string;
+  variables_involved?: string[];
+  source_context?: string;
+  confidence?: Confidence;
+};
+
+type RawAssumption = {
+  assumption?: string;
+  source_context?: string;
+  confidence?: Confidence;
+};
+
+type RawLimitation = {
+  limitation?: string;
+  source_context?: string;
+  confidence?: Confidence;
+};
+
 type RawModelCard = {
   short_summary?: string;
   model_type?: string;
@@ -61,7 +89,13 @@ type RawModelCard = {
   missing_information?: string[];
   can_generate_ode_template?: boolean;
 };
+
 type RawExtraction = {
+  paper_title_or_topic?: string;
+  system_type?: string;
+  process_description?: string;
+  state_variables?: RawStateVariable[];
+  parameters?: RawParameter[];
   equations?: RawEquation[];
   assumptions?: RawAssumption[];
   limitations?: RawLimitation[];
@@ -88,9 +122,7 @@ function ConfidenceBadge({ value }: { value?: Confidence }) {
 
 function ChipList({ items }: { items: string[] }) {
   if (!items.length) {
-    return (
-      <p className="text-sm text-muted-foreground italic">—</p>
-    );
+    return <p className="text-sm text-muted-foreground italic">—</p>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -147,14 +179,12 @@ export default function ModelCardDetail() {
   const assumptionItems = assumptions.filter((a) => a.kind === "assumption");
   const limitationItems = assumptions.filter((a) => a.kind === "limitation");
 
-  // Optional rich passthrough of the canonical provider output. Null for
-  // pre-migration rows; we degrade gracefully and only render the extra
-  // sections when present.
   const raw = extraction.rawExtractionJson as RawExtraction | null | undefined;
   const modelCard = raw?.model_card;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
+      {/* Header */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge
@@ -186,11 +216,23 @@ export default function ModelCardDetail() {
                 Project: {project.name}
               </p>
             ) : null}
+            {raw?.system_type ? (
+              <p className="text-sm text-muted-foreground mt-1">
+                System type:{" "}
+                <span className="font-medium text-foreground">
+                  {raw.system_type}
+                </span>
+              </p>
+            ) : null}
           </div>
           <div className="flex gap-2 flex-wrap justify-end">
             {raw?.model_card?.can_generate_ode_template && (
               <Link href="/simulation">
-                <Button variant="default" size="default" data-testid="btn-run-simulation">
+                <Button
+                  variant="default"
+                  size="default"
+                  data-testid="btn-run-simulation"
+                >
                   <Play className="h-4 w-4 mr-2" />
                   Run Simulation
                 </Button>
@@ -210,13 +252,11 @@ export default function ModelCardDetail() {
         </div>
       </div>
 
+      {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-5 lg:w-[720px]">
+        <TabsList className="flex flex-wrap h-auto gap-1 w-full lg:w-auto">
           <TabsTrigger value="overview" data-testid="tab-overview">
             Overview
-          </TabsTrigger>
-          <TabsTrigger value="equations" data-testid="tab-equations">
-            Equations ({equations.length})
           </TabsTrigger>
           <TabsTrigger value="variables" data-testid="tab-variables">
             Variables ({variables.length})
@@ -224,11 +264,24 @@ export default function ModelCardDetail() {
           <TabsTrigger value="parameters" data-testid="tab-parameters">
             Parameters ({parameters.length})
           </TabsTrigger>
+          <TabsTrigger value="equations" data-testid="tab-equations">
+            Equations ({equations.length})
+          </TabsTrigger>
+          <TabsTrigger value="assumptions" data-testid="tab-assumptions">
+            Assumptions ({assumptionItems.length})
+          </TabsTrigger>
+          <TabsTrigger value="missing" data-testid="tab-missing">
+            Missing Info
+          </TabsTrigger>
           <TabsTrigger value="ode" data-testid="tab-ode">
             ODE Template
           </TabsTrigger>
+          <TabsTrigger value="raw" data-testid="tab-raw">
+            Raw JSON
+          </TabsTrigger>
         </TabsList>
 
+        {/* Overview */}
         <TabsContent value="overview" className="space-y-6 mt-6">
           <Card>
             <CardHeader>
@@ -263,7 +316,7 @@ export default function ModelCardDetail() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5 text-muted-foreground" />
-                  Model Card
+                  Model Card Summary
                 </CardTitle>
                 {modelCard.model_type ? (
                   <CardDescription>
@@ -278,7 +331,7 @@ export default function ModelCardDetail() {
                     {modelCard.short_summary}
                   </p>
                 ) : null}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground mb-2">
                       Inputs
@@ -297,131 +350,21 @@ export default function ModelCardDetail() {
                     </p>
                     <ChipList items={modelCard.control_variables ?? []} />
                   </div>
-                  <div>
-                    <p className="text-xs font-mono uppercase tracking-wider text-muted-foreground mb-2">
-                      Missing Information
-                    </p>
-                    {(modelCard.missing_information ?? []).length === 0 ? (
-                      <p className="text-sm text-muted-foreground italic">—</p>
-                    ) : (
-                      <ul className="list-disc pl-5 space-y-1 text-sm">
-                        {modelCard.missing_information!.map((m, i) => (
-                          <li key={`${m}-${i}`}>{m}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
                 </div>
               </CardContent>
             </Card>
           ) : null}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card className="bg-muted/30 border-muted-foreground/20">
-              <CardHeader>
-                <CardTitle className="text-base">Assumptions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {assumptionItems.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">
-                    No assumptions extracted.
-                  </p>
-                ) : (
-                  <ul className="list-disc pl-5 space-y-2 text-sm">
-                    {assumptionItems.map((item, i) => (
-                      <li key={item.id}>
-                        {item.text}
-                        <ConfidenceBadge
-                          value={raw?.assumptions?.[i]?.confidence}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="bg-destructive/5 border-destructive/20">
-              <CardHeader>
-                <CardTitle className="text-base text-destructive">
-                  Limitations
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {limitationItems.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">
-                    No limitations extracted.
-                  </p>
-                ) : (
-                  <ul className="list-disc pl-5 space-y-2 text-sm text-destructive/90">
-                    {limitationItems.map((item, i) => (
-                      <li key={item.id}>
-                        {item.text}
-                        <ConfidenceBadge
-                          value={raw?.limitations?.[i]?.confidence}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-          </div>
         </TabsContent>
 
-        <TabsContent value="equations" className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Governing Equations</CardTitle>
-              <CardDescription>
-                Extracted mathematical relationships from the source material.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[35%]">Equation (LaTeX)</TableHead>
-                    <TableHead className="w-[30%]">Description</TableHead>
-                    <TableHead className="w-[10%]">Confidence</TableHead>
-                    <TableHead className="w-[25%]">Source Quote</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {equations.map((eq, i) => (
-                    <TableRow key={eq.id}>
-                      <TableCell className="font-mono text-sm bg-muted/30 whitespace-pre-wrap font-medium">
-                        {eq.latex}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {eq.description}
-                      </TableCell>
-                      <TableCell>
-                        {raw?.equations?.[i]?.confidence ? (
-                          <ConfidenceBadge
-                            value={raw.equations[i]!.confidence}
-                          />
-                        ) : (
-                          <span className="text-xs text-muted-foreground italic">
-                            —
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground italic border-l border-border pl-3">
-                        "{eq.sourceQuote}"
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
+        {/* Variables */}
         <TabsContent value="variables" className="mt-6">
           <Card>
             <CardHeader>
-              <CardTitle>State & Input Variables</CardTitle>
+              <CardTitle>State &amp; Input Variables</CardTitle>
+              <CardDescription>
+                Symbols, units, roles, and source context extracted from the
+                paper.
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
@@ -437,12 +380,17 @@ export default function ModelCardDetail() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {variables.map((v) => (
+                  {variables.map((v, i) => (
                     <TableRow key={v.id}>
                       <TableCell className="font-mono font-bold text-primary">
                         {v.symbol}
                       </TableCell>
-                      <TableCell className="font-medium">{v.name}</TableCell>
+                      <TableCell className="font-medium">
+                        {v.name}
+                        <ConfidenceBadge
+                          value={raw?.state_variables?.[i]?.confidence}
+                        />
+                      </TableCell>
                       <TableCell>
                         <span className="font-mono text-xs bg-muted/50 rounded px-2 py-1">
                           {v.unit || "—"}
@@ -467,29 +415,37 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
+        {/* Parameters */}
         <TabsContent value="parameters" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>Model Parameters</CardTitle>
+              <CardDescription>
+                Numerical values, units, confidence scores, and source quotes.
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Symbol</TableHead>
+                    <TableHead>Name</TableHead>
                     <TableHead>Value</TableHead>
                     <TableHead>Unit</TableHead>
                     <TableHead>Confidence</TableHead>
-                    <TableHead className="hidden md:table-cell w-1/3">
+                    <TableHead className="hidden md:table-cell w-1/4">
                       Source Quote
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {parameters.map((p) => (
+                  {parameters.map((p, i) => (
                     <TableRow key={p.id}>
                       <TableCell className="font-mono font-bold text-primary">
                         {p.symbol}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {raw?.parameters?.[i]?.name ?? "—"}
                       </TableCell>
                       <TableCell className="font-mono text-sm">
                         {p.value}
@@ -500,18 +456,7 @@ export default function ModelCardDetail() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            p.confidence === "high"
-                              ? "default"
-                              : p.confidence === "medium"
-                                ? "secondary"
-                                : "destructive"
-                          }
-                          className="text-[10px] uppercase"
-                        >
-                          {p.confidence}
-                        </Badge>
+                        <ConfidenceBadge value={p.confidence as Confidence} />
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground italic hidden md:table-cell">
                         "{p.sourceQuote}"
@@ -524,21 +469,218 @@ export default function ModelCardDetail() {
           </Card>
         </TabsContent>
 
+        {/* Equations */}
+        <TabsContent value="equations" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Governing Equations</CardTitle>
+              <CardDescription>
+                Extracted mathematical relationships with LaTeX, plaintext, and
+                source context.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[30%]">LaTeX</TableHead>
+                    <TableHead className="w-[20%]">Plaintext</TableHead>
+                    <TableHead className="w-[25%]">Meaning</TableHead>
+                    <TableHead className="w-[10%]">Confidence</TableHead>
+                    <TableHead className="w-[15%]">Source Quote</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {equations.map((eq, i) => (
+                    <TableRow key={eq.id}>
+                      <TableCell className="font-mono text-sm bg-muted/30 whitespace-pre-wrap font-medium">
+                        {eq.latex}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {raw?.equations?.[i]?.equation_plaintext ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {eq.description}
+                      </TableCell>
+                      <TableCell>
+                        <ConfidenceBadge
+                          value={raw?.equations?.[i]?.confidence}
+                        />
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground italic border-l border-border pl-3">
+                        "{eq.sourceQuote}"
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Assumptions */}
+        <TabsContent value="assumptions" className="mt-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card className="bg-muted/30 border-muted-foreground/20">
+              <CardHeader>
+                <CardTitle className="text-base">Assumptions</CardTitle>
+                <CardDescription>
+                  Conditions taken as given in the model formulation.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {assumptionItems.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">
+                    No assumptions extracted.
+                  </p>
+                ) : (
+                  <ul className="space-y-3">
+                    {assumptionItems.map((item, i) => (
+                      <li key={item.id} className="text-sm">
+                        <div className="flex items-start gap-2">
+                          <span className="mt-0.5 text-muted-foreground">•</span>
+                          <div>
+                            {item.text}
+                            <ConfidenceBadge
+                              value={raw?.assumptions?.[i]?.confidence}
+                            />
+                            {raw?.assumptions?.[i]?.source_context ? (
+                              <p className="text-xs text-muted-foreground italic mt-1">
+                                "{raw.assumptions[i]!.source_context}"
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="bg-destructive/5 border-destructive/20">
+              <CardHeader>
+                <CardTitle className="text-base text-destructive">
+                  Limitations
+                </CardTitle>
+                <CardDescription>
+                  Known boundaries and weaknesses of the model.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {limitationItems.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">
+                    No limitations extracted.
+                  </p>
+                ) : (
+                  <ul className="space-y-3">
+                    {limitationItems.map((item, i) => (
+                      <li key={item.id} className="text-sm text-destructive/90">
+                        <div className="flex items-start gap-2">
+                          <span className="mt-0.5">•</span>
+                          <div>
+                            {item.text}
+                            <ConfidenceBadge
+                              value={raw?.limitations?.[i]?.confidence}
+                            />
+                            {raw?.limitations?.[i]?.source_context ? (
+                              <p className="text-xs text-muted-foreground italic mt-1">
+                                "{raw.limitations[i]!.source_context}"
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Missing Info */}
+        <TabsContent value="missing" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Info className="h-5 w-5 text-muted-foreground" />
+                Missing Information
+              </CardTitle>
+              <CardDescription>
+                Data, parameters, or conditions not present in the source
+                material that would be needed for a complete model.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(modelCard?.missing_information ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">
+                  No missing information identified — or no model card available
+                  for this extraction.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {modelCard!.missing_information!.map((m, i) => (
+                    <li
+                      key={`${m}-${i}`}
+                      className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 text-sm"
+                    >
+                      <AlertCircle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                      {m}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ODE Template */}
         <TabsContent value="ode" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Code2 className="h-5 w-5 text-muted-foreground" />
-                Generated ODE template (Python)
+                Generated ODE Template (Python)
               </CardTitle>
               <CardDescription>
-                Drop-in starting point using <code>scipy.integrate.solve_ivp</code>.
+                Drop-in starting point using{" "}
+                <code>scipy.integrate.solve_ivp</code>.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <pre className="text-xs bg-muted/50 rounded p-4 overflow-x-auto font-mono leading-relaxed">
                 {extraction.odeTemplate}
               </pre>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Raw JSON */}
+        <TabsContent value="raw" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Download className="h-5 w-5 text-muted-foreground" />
+                Raw Extraction JSON
+              </CardTitle>
+              <CardDescription>
+                Full validated provider output as stored in{" "}
+                <code>raw_extraction_json</code>. Use the Export button above
+                to download the complete project package.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {raw ? (
+                <pre className="text-xs bg-muted/50 rounded p-4 overflow-x-auto font-mono leading-relaxed max-h-[600px]">
+                  {JSON.stringify(raw, null, 2)}
+                </pre>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">
+                  No raw extraction JSON available for this record (pre-migration
+                  row).
+                </p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
