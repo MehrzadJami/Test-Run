@@ -1,0 +1,21 @@
+{
+  "fixture_name": "Chemostat Monod Kinetics",
+  "expected_variable_symbols": ["X", "S"],
+  "expected_variable_units": {
+    "x": "g/L",
+    "s": "g/L"
+  },
+  "expected_parameter_symbols": ["mumax", "Ks", "Yxs", "D", "Sin"],
+  "expected_parameter_units": {
+    "mumax": "1/h",
+    "ks": "g/L",
+    "yxs": "g-X/g-S",
+    "d": "1/h",
+    "sin": "g/L"
+  },
+  "expected_equation_symbol_sets": [
+    ["mu", "S", "Ks"],
+    ["X", "mu", "D"],
+    ["S", "D", "Sin", "Yxs"]
+  ]
+}

@@ -36,6 +36,8 @@ export class OpenAIProvider implements ExtractionProvider {
   async extract(sourceText: string): Promise<{
     raw: unknown;
     tokenMeta: OpenAITokenMeta | null;
+    providerModel: string;
+    systemPrompt: string;
   }> {
     const client = getClient();
 
@@ -71,6 +73,13 @@ export class OpenAIProvider implements ExtractionProvider {
       raw = content;
     }
 
-    return { raw, tokenMeta };
+    return {
+      raw,
+      tokenMeta,
+      // M17: expose model ID and system prompt for audit trail.
+      // systemPrompt contains only instructional text — NO API keys.
+      providerModel: this.model,
+      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+    };
   }
 }

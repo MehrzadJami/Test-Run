@@ -16,13 +16,42 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
- * @summary List all projects
+ * Returns the authenticated user from the session cookie, or null if not logged in.
+ * @summary Get the current authenticated user
+ */
+export const GetCurrentAuthUserResponse = zod.object({
+  user: zod.union([
+    zod.object({
+      id: zod.string(),
+      email: zod.string().nullish(),
+      firstName: zod.string().nullish(),
+      lastName: zod.string().nullish(),
+      profileImageUrl: zod.string().nullish(),
+    }),
+    zod.null(),
+  ]),
+});
+
+/**
+ * If authenticated, returns the user's own projects plus all public projects. If not authenticated, returns only public projects.
+ * @summary List projects visible to the current user
  */
 export const ListProjectsResponseItem = zod
   .object({
     id: zod.number(),
     name: zod.string(),
     description: zod.string(),
+    ownerId: zod
+      .string()
+      .nullable()
+      .describe(
+        "User ID of the project owner. Null for legacy\/demo projects.",
+      ),
+    visibility: zod
+      .enum(["private", "public"])
+      .describe(
+        "Who can view this project. Private projects are only accessible to their owner.",
+      ),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   })
@@ -56,6 +85,17 @@ export const GetProjectResponse = zod
     id: zod.number(),
     name: zod.string(),
     description: zod.string(),
+    ownerId: zod
+      .string()
+      .nullable()
+      .describe(
+        "User ID of the project owner. Null for legacy\/demo projects.",
+      ),
+    visibility: zod
+      .enum(["private", "public"])
+      .describe(
+        "Who can view this project. Private projects are only accessible to their owner.",
+      ),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   })
@@ -92,6 +132,34 @@ export const GetProjectResponse = zod
  */
 export const DeleteProjectParams = zod.object({
   projectId: zod.coerce.number(),
+});
+
+/**
+ * @summary Update project visibility (owner only)
+ */
+export const UpdateProjectVisibilityParams = zod.object({
+  projectId: zod.coerce.number(),
+});
+
+export const UpdateProjectVisibilityBody = zod.object({
+  visibility: zod.enum(["private", "public"]),
+});
+
+export const UpdateProjectVisibilityResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  description: zod.string(),
+  ownerId: zod
+    .string()
+    .nullable()
+    .describe("User ID of the project owner. Null for legacy\/demo projects."),
+  visibility: zod
+    .enum(["private", "public"])
+    .describe(
+      "Who can view this project. Private projects are only accessible to their owner.",
+    ),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
 });
 
 /**
@@ -179,6 +247,82 @@ export const GetModelCardByProjectResponse = zod.object({
       .describe(
         "Full validated provider output matching the canonical ExtractionResultSchema (paper_title_or_topic, system_type, process_description, state_variables, parameters, equations, assumptions, limitations, model_card). Null for legacy rows created before this column existed; clients should fall back to the normalized tables in that case.",
       ),
+    providerModel: zod
+      .string()
+      .describe(
+        'Exact model identifier used by the provider (e.g. \"gpt-4o\", \"gemini-1.5-flash\", \"mock\"). Empty string for legacy rows.',
+      ),
+    systemPrompt: zod
+      .string()
+      .describe(
+        "System prompt sent verbatim to the AI provider. Contains only instructional text — NO API keys or secrets. Empty string for mock provider, legacy rows, and public share views.",
+      ),
+    promptTemplateSummary: zod
+      .string()
+      .describe(
+        "One-line description of the extraction prompt template purpose.",
+      ),
+    rawProviderResponse: zod
+      .record(zod.string(), zod.unknown())
+      .nullable()
+      .describe(
+        "Raw provider response BEFORE JSON repair and Zod validation. Distinct from rawExtractionJson (post-validation canonical result). Null for mock provider (no API call made), legacy rows, and public share views.",
+      ),
+    repairStatus: zod
+      .enum(["not_needed", "repaired", "failed"])
+      .describe(
+        "Whether the provider response required JSON repair before validation.",
+      ),
+    validationErrors: zod
+      .string()
+      .nullable()
+      .describe(
+        "Zod validation error details if the extraction failed or required repair. Null when the extraction succeeded cleanly.",
+      ),
+    tokenUsage: zod
+      .record(zod.string(), zod.unknown())
+      .nullable()
+      .describe(
+        "Token count and estimated cost metadata from the provider. Shape varies by provider (OpenAI vs Gemini). Null when unavailable (mock provider always returns null).",
+      ),
+    modelType: zod
+      .enum([
+        "chemostat",
+        "batch_reactor",
+        "fed_batch",
+        "cstr",
+        "gas_liquid_transfer",
+        "microalgae_pbr",
+        "generic_ode",
+      ])
+      .describe(
+        'Auto-detected model type from the rule-based domain classifier. \"generic_ode\" is the safe default for unknown models and legacy rows.',
+      ),
+    modelTypeConfidence: zod
+      .number()
+      .describe(
+        "Classifier confidence score in [0, 1]. Computed as score \/ (score + 10) from keyword evidence. 0 means no domain keywords were found.",
+      ),
+    modelTypeMatchedKeywords: zod
+      .array(zod.string())
+      .describe(
+        "Keywords and phrases from the source text \/ extracted fields that contributed to the auto-classification score.",
+      ),
+    modelTypeOverride: zod
+      .union([
+        zod.literal("chemostat"),
+        zod.literal("batch_reactor"),
+        zod.literal("fed_batch"),
+        zod.literal("cstr"),
+        zod.literal("gas_liquid_transfer"),
+        zod.literal("microalgae_pbr"),
+        zod.literal("generic_ode"),
+        zod.literal(null),
+      ])
+      .nullable()
+      .describe(
+        'User-supplied model type override. When non-null, takes precedence over modelType in all frontend displays. Null means \"use the classifier result\".',
+      ),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),
@@ -186,9 +330,35 @@ export const GetModelCardByProjectResponse = zod.object({
     zod.object({
       id: zod.number(),
       ordinal: zod.number(),
-      latex: zod.string(),
-      description: zod.string(),
+      label: zod.string().describe('Short label, e.g. \"(1)\" or \"Eq. 3\".'),
+      latex: zod.string().describe("LaTeX representation of the equation."),
+      plaintext: zod.string().describe("Plain-text (ASCII) representation."),
+      meaning: zod
+        .string()
+        .describe(
+          "Human-readable explanation of what the equation represents.",
+        ),
+      variablesInvolved: zod
+        .array(zod.string())
+        .describe("Symbols appearing in this equation."),
+      confidence: zod.enum(["high", "medium", "low"]),
+      description: zod
+        .string()
+        .describe(
+          "Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility.",
+        ),
       sourceQuote: zod.string(),
+      editedByUser: zod
+        .boolean()
+        .describe(
+          "True if any field has been manually edited after extraction.",
+        ),
+      originalValue: zod
+        .record(zod.string(), zod.unknown())
+        .nullish()
+        .describe(
+          "Snapshot of the row before the first human edit. Null if unedited.",
+        ),
     }),
   ),
   variables: zod.array(
@@ -197,9 +367,15 @@ export const GetModelCardByProjectResponse = zod.object({
       ordinal: zod.number(),
       symbol: zod.string(),
       name: zod.string(),
+      meaning: zod
+        .string()
+        .describe("Explanation of what the variable represents physically."),
       unit: zod.string(),
       role: zod.enum(["state", "input", "output"]),
+      confidence: zod.enum(["high", "medium", "low"]),
       sourceQuote: zod.string(),
+      editedByUser: zod.boolean(),
+      originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
     }),
   ),
   parameters: zod.array(
@@ -207,10 +383,13 @@ export const GetModelCardByProjectResponse = zod.object({
       id: zod.number(),
       ordinal: zod.number(),
       symbol: zod.string(),
+      name: zod.string().describe("Full descriptive name of the parameter."),
       value: zod.number(),
       unit: zod.string(),
       confidence: zod.enum(["high", "medium", "low"]),
       sourceQuote: zod.string(),
+      editedByUser: zod.boolean(),
+      originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
     }),
   ),
   assumptions: zod.array(
@@ -219,6 +398,10 @@ export const GetModelCardByProjectResponse = zod.object({
       ordinal: zod.number(),
       kind: zod.enum(["assumption", "limitation"]),
       text: zod.string(),
+      sourceQuote: zod.string(),
+      confidence: zod.enum(["high", "medium", "low"]),
+      editedByUser: zod.boolean(),
+      originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
     }),
   ),
 });
@@ -235,6 +418,17 @@ export const ExportProjectResponse = zod.object({
     id: zod.number(),
     name: zod.string(),
     description: zod.string(),
+    ownerId: zod
+      .string()
+      .nullable()
+      .describe(
+        "User ID of the project owner. Null for legacy\/demo projects.",
+      ),
+    visibility: zod
+      .enum(["private", "public"])
+      .describe(
+        "Who can view this project. Private projects are only accessible to their owner.",
+      ),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
   }),
@@ -267,6 +461,82 @@ export const ExportProjectResponse = zod.object({
           .describe(
             "Full validated provider output matching the canonical ExtractionResultSchema (paper_title_or_topic, system_type, process_description, state_variables, parameters, equations, assumptions, limitations, model_card). Null for legacy rows created before this column existed; clients should fall back to the normalized tables in that case.",
           ),
+        providerModel: zod
+          .string()
+          .describe(
+            'Exact model identifier used by the provider (e.g. \"gpt-4o\", \"gemini-1.5-flash\", \"mock\"). Empty string for legacy rows.',
+          ),
+        systemPrompt: zod
+          .string()
+          .describe(
+            "System prompt sent verbatim to the AI provider. Contains only instructional text — NO API keys or secrets. Empty string for mock provider, legacy rows, and public share views.",
+          ),
+        promptTemplateSummary: zod
+          .string()
+          .describe(
+            "One-line description of the extraction prompt template purpose.",
+          ),
+        rawProviderResponse: zod
+          .record(zod.string(), zod.unknown())
+          .nullable()
+          .describe(
+            "Raw provider response BEFORE JSON repair and Zod validation. Distinct from rawExtractionJson (post-validation canonical result). Null for mock provider (no API call made), legacy rows, and public share views.",
+          ),
+        repairStatus: zod
+          .enum(["not_needed", "repaired", "failed"])
+          .describe(
+            "Whether the provider response required JSON repair before validation.",
+          ),
+        validationErrors: zod
+          .string()
+          .nullable()
+          .describe(
+            "Zod validation error details if the extraction failed or required repair. Null when the extraction succeeded cleanly.",
+          ),
+        tokenUsage: zod
+          .record(zod.string(), zod.unknown())
+          .nullable()
+          .describe(
+            "Token count and estimated cost metadata from the provider. Shape varies by provider (OpenAI vs Gemini). Null when unavailable (mock provider always returns null).",
+          ),
+        modelType: zod
+          .enum([
+            "chemostat",
+            "batch_reactor",
+            "fed_batch",
+            "cstr",
+            "gas_liquid_transfer",
+            "microalgae_pbr",
+            "generic_ode",
+          ])
+          .describe(
+            'Auto-detected model type from the rule-based domain classifier. \"generic_ode\" is the safe default for unknown models and legacy rows.',
+          ),
+        modelTypeConfidence: zod
+          .number()
+          .describe(
+            "Classifier confidence score in [0, 1]. Computed as score \/ (score + 10) from keyword evidence. 0 means no domain keywords were found.",
+          ),
+        modelTypeMatchedKeywords: zod
+          .array(zod.string())
+          .describe(
+            "Keywords and phrases from the source text \/ extracted fields that contributed to the auto-classification score.",
+          ),
+        modelTypeOverride: zod
+          .union([
+            zod.literal("chemostat"),
+            zod.literal("batch_reactor"),
+            zod.literal("fed_batch"),
+            zod.literal("cstr"),
+            zod.literal("gas_liquid_transfer"),
+            zod.literal("microalgae_pbr"),
+            zod.literal("generic_ode"),
+            zod.literal(null),
+          ])
+          .nullable()
+          .describe(
+            'User-supplied model type override. When non-null, takes precedence over modelType in all frontend displays. Null means \"use the classifier result\".',
+          ),
         createdAt: zod.coerce.date(),
         updatedAt: zod.coerce.date(),
       }),
@@ -274,9 +544,39 @@ export const ExportProjectResponse = zod.object({
         zod.object({
           id: zod.number(),
           ordinal: zod.number(),
-          latex: zod.string(),
-          description: zod.string(),
+          label: zod
+            .string()
+            .describe('Short label, e.g. \"(1)\" or \"Eq. 3\".'),
+          latex: zod.string().describe("LaTeX representation of the equation."),
+          plaintext: zod
+            .string()
+            .describe("Plain-text (ASCII) representation."),
+          meaning: zod
+            .string()
+            .describe(
+              "Human-readable explanation of what the equation represents.",
+            ),
+          variablesInvolved: zod
+            .array(zod.string())
+            .describe("Symbols appearing in this equation."),
+          confidence: zod.enum(["high", "medium", "low"]),
+          description: zod
+            .string()
+            .describe(
+              "Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility.",
+            ),
           sourceQuote: zod.string(),
+          editedByUser: zod
+            .boolean()
+            .describe(
+              "True if any field has been manually edited after extraction.",
+            ),
+          originalValue: zod
+            .record(zod.string(), zod.unknown())
+            .nullish()
+            .describe(
+              "Snapshot of the row before the first human edit. Null if unedited.",
+            ),
         }),
       ),
       variables: zod.array(
@@ -285,9 +585,17 @@ export const ExportProjectResponse = zod.object({
           ordinal: zod.number(),
           symbol: zod.string(),
           name: zod.string(),
+          meaning: zod
+            .string()
+            .describe(
+              "Explanation of what the variable represents physically.",
+            ),
           unit: zod.string(),
           role: zod.enum(["state", "input", "output"]),
+          confidence: zod.enum(["high", "medium", "low"]),
           sourceQuote: zod.string(),
+          editedByUser: zod.boolean(),
+          originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
         }),
       ),
       parameters: zod.array(
@@ -295,10 +603,15 @@ export const ExportProjectResponse = zod.object({
           id: zod.number(),
           ordinal: zod.number(),
           symbol: zod.string(),
+          name: zod
+            .string()
+            .describe("Full descriptive name of the parameter."),
           value: zod.number(),
           unit: zod.string(),
           confidence: zod.enum(["high", "medium", "low"]),
           sourceQuote: zod.string(),
+          editedByUser: zod.boolean(),
+          originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
         }),
       ),
       assumptions: zod.array(
@@ -307,9 +620,451 @@ export const ExportProjectResponse = zod.object({
           ordinal: zod.number(),
           kind: zod.enum(["assumption", "limitation"]),
           text: zod.string(),
+          sourceQuote: zod.string(),
+          confidence: zod.enum(["high", "medium", "low"]),
+          editedByUser: zod.boolean(),
+          originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
         }),
       ),
     }),
   ),
   exportedAt: zod.coerce.date(),
+});
+
+/**
+ * Returns the model card for public sharing. The project must have visibility=public. Audit/provider fields (systemPrompt, rawProviderResponse, promptTemplateSummary) are redacted in the response.
+ * @summary Get a publicly shared model card (no auth required)
+ */
+export const GetPublicModelCardParams = zod.object({
+  extractionId: zod.coerce.number(),
+});
+
+export const GetPublicModelCardResponse = zod.object({
+  extraction: zod.object({
+    id: zod.number(),
+    projectId: zod.number(),
+    sourceDocumentId: zod.number().nullable(),
+    providerUsed: zod.enum(["mock", "openai", "gemini"]),
+    status: zod.enum(["pending", "ready", "failed"]),
+    modelCardTitle: zod.string(),
+    domain: zod.string(),
+    systemDescription: zod.string(),
+    problemStatement: zod.string(),
+    odeTemplate: zod.string(),
+    rawExtractionJson: zod
+      .record(zod.string(), zod.unknown())
+      .nullable()
+      .describe(
+        "Full validated provider output matching the canonical ExtractionResultSchema (paper_title_or_topic, system_type, process_description, state_variables, parameters, equations, assumptions, limitations, model_card). Null for legacy rows created before this column existed; clients should fall back to the normalized tables in that case.",
+      ),
+    providerModel: zod
+      .string()
+      .describe(
+        'Exact model identifier used by the provider (e.g. \"gpt-4o\", \"gemini-1.5-flash\", \"mock\"). Empty string for legacy rows.',
+      ),
+    systemPrompt: zod
+      .string()
+      .describe(
+        "System prompt sent verbatim to the AI provider. Contains only instructional text — NO API keys or secrets. Empty string for mock provider, legacy rows, and public share views.",
+      ),
+    promptTemplateSummary: zod
+      .string()
+      .describe(
+        "One-line description of the extraction prompt template purpose.",
+      ),
+    rawProviderResponse: zod
+      .record(zod.string(), zod.unknown())
+      .nullable()
+      .describe(
+        "Raw provider response BEFORE JSON repair and Zod validation. Distinct from rawExtractionJson (post-validation canonical result). Null for mock provider (no API call made), legacy rows, and public share views.",
+      ),
+    repairStatus: zod
+      .enum(["not_needed", "repaired", "failed"])
+      .describe(
+        "Whether the provider response required JSON repair before validation.",
+      ),
+    validationErrors: zod
+      .string()
+      .nullable()
+      .describe(
+        "Zod validation error details if the extraction failed or required repair. Null when the extraction succeeded cleanly.",
+      ),
+    tokenUsage: zod
+      .record(zod.string(), zod.unknown())
+      .nullable()
+      .describe(
+        "Token count and estimated cost metadata from the provider. Shape varies by provider (OpenAI vs Gemini). Null when unavailable (mock provider always returns null).",
+      ),
+    modelType: zod
+      .enum([
+        "chemostat",
+        "batch_reactor",
+        "fed_batch",
+        "cstr",
+        "gas_liquid_transfer",
+        "microalgae_pbr",
+        "generic_ode",
+      ])
+      .describe(
+        'Auto-detected model type from the rule-based domain classifier. \"generic_ode\" is the safe default for unknown models and legacy rows.',
+      ),
+    modelTypeConfidence: zod
+      .number()
+      .describe(
+        "Classifier confidence score in [0, 1]. Computed as score \/ (score + 10) from keyword evidence. 0 means no domain keywords were found.",
+      ),
+    modelTypeMatchedKeywords: zod
+      .array(zod.string())
+      .describe(
+        "Keywords and phrases from the source text \/ extracted fields that contributed to the auto-classification score.",
+      ),
+    modelTypeOverride: zod
+      .union([
+        zod.literal("chemostat"),
+        zod.literal("batch_reactor"),
+        zod.literal("fed_batch"),
+        zod.literal("cstr"),
+        zod.literal("gas_liquid_transfer"),
+        zod.literal("microalgae_pbr"),
+        zod.literal("generic_ode"),
+        zod.literal(null),
+      ])
+      .nullable()
+      .describe(
+        'User-supplied model type override. When non-null, takes precedence over modelType in all frontend displays. Null means \"use the classifier result\".',
+      ),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+  equations: zod.array(
+    zod.object({
+      id: zod.number(),
+      ordinal: zod.number(),
+      label: zod.string().describe('Short label, e.g. \"(1)\" or \"Eq. 3\".'),
+      latex: zod.string().describe("LaTeX representation of the equation."),
+      plaintext: zod.string().describe("Plain-text (ASCII) representation."),
+      meaning: zod
+        .string()
+        .describe(
+          "Human-readable explanation of what the equation represents.",
+        ),
+      variablesInvolved: zod
+        .array(zod.string())
+        .describe("Symbols appearing in this equation."),
+      confidence: zod.enum(["high", "medium", "low"]),
+      description: zod
+        .string()
+        .describe(
+          "Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility.",
+        ),
+      sourceQuote: zod.string(),
+      editedByUser: zod
+        .boolean()
+        .describe(
+          "True if any field has been manually edited after extraction.",
+        ),
+      originalValue: zod
+        .record(zod.string(), zod.unknown())
+        .nullish()
+        .describe(
+          "Snapshot of the row before the first human edit. Null if unedited.",
+        ),
+    }),
+  ),
+  variables: zod.array(
+    zod.object({
+      id: zod.number(),
+      ordinal: zod.number(),
+      symbol: zod.string(),
+      name: zod.string(),
+      meaning: zod
+        .string()
+        .describe("Explanation of what the variable represents physically."),
+      unit: zod.string(),
+      role: zod.enum(["state", "input", "output"]),
+      confidence: zod.enum(["high", "medium", "low"]),
+      sourceQuote: zod.string(),
+      editedByUser: zod.boolean(),
+      originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+    }),
+  ),
+  parameters: zod.array(
+    zod.object({
+      id: zod.number(),
+      ordinal: zod.number(),
+      symbol: zod.string(),
+      name: zod.string().describe("Full descriptive name of the parameter."),
+      value: zod.number(),
+      unit: zod.string(),
+      confidence: zod.enum(["high", "medium", "low"]),
+      sourceQuote: zod.string(),
+      editedByUser: zod.boolean(),
+      originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+    }),
+  ),
+  assumptions: zod.array(
+    zod.object({
+      id: zod.number(),
+      ordinal: zod.number(),
+      kind: zod.enum(["assumption", "limitation"]),
+      text: zod.string(),
+      sourceQuote: zod.string(),
+      confidence: zod.enum(["high", "medium", "low"]),
+      editedByUser: zod.boolean(),
+      originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+    }),
+  ),
+});
+
+/**
+ * Accepts a partial update. On first edit the original extracted value is
+snapshotted into originalValue for audit purposes. rawExtractionJson is
+never mutated. Returns the full updated variable row.
+
+ * @summary Update one or more fields of a variable (human verification)
+ */
+export const PatchVariableParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const PatchVariableBody = zod
+  .object({
+    symbol: zod.string().min(1).optional(),
+    name: zod.string().optional(),
+    meaning: zod.string().optional(),
+    unit: zod.string().optional(),
+    role: zod.enum(["state", "input", "output"]).optional(),
+    confidence: zod.enum(["high", "medium", "low"]).optional(),
+    sourceQuote: zod.string().optional(),
+  })
+  .describe("Partial update for a variable. Only provided fields are changed.");
+
+export const PatchVariableResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  symbol: zod.string(),
+  name: zod.string(),
+  meaning: zod
+    .string()
+    .describe("Explanation of what the variable represents physically."),
+  unit: zod.string(),
+  role: zod.enum(["state", "input", "output"]),
+  confidence: zod.enum(["high", "medium", "low"]),
+  sourceQuote: zod.string(),
+  editedByUser: zod.boolean(),
+  originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+});
+
+/**
+ * Restores all fields from the originalValue snapshot, clears editedByUser,
+and nulls originalValue. No-op if the variable has not been edited.
+
+ * @summary Reset a variable to its original extracted value
+ */
+export const ResetVariableParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ResetVariableResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  symbol: zod.string(),
+  name: zod.string(),
+  meaning: zod
+    .string()
+    .describe("Explanation of what the variable represents physically."),
+  unit: zod.string(),
+  role: zod.enum(["state", "input", "output"]),
+  confidence: zod.enum(["high", "medium", "low"]),
+  sourceQuote: zod.string(),
+  editedByUser: zod.boolean(),
+  originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+});
+
+/**
+ * @summary Update one or more fields of a parameter (human verification)
+ */
+export const PatchParameterParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const PatchParameterBody = zod
+  .object({
+    symbol: zod.string().min(1).optional(),
+    name: zod.string().optional(),
+    value: zod.number().optional(),
+    unit: zod.string().optional(),
+    confidence: zod.enum(["high", "medium", "low"]).optional(),
+    sourceQuote: zod.string().optional(),
+  })
+  .describe(
+    "Partial update for a parameter. Only provided fields are changed.",
+  );
+
+export const PatchParameterResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  symbol: zod.string(),
+  name: zod.string().describe("Full descriptive name of the parameter."),
+  value: zod.number(),
+  unit: zod.string(),
+  confidence: zod.enum(["high", "medium", "low"]),
+  sourceQuote: zod.string(),
+  editedByUser: zod.boolean(),
+  originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+});
+
+/**
+ * @summary Reset a parameter to its original extracted value
+ */
+export const ResetParameterParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ResetParameterResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  symbol: zod.string(),
+  name: zod.string().describe("Full descriptive name of the parameter."),
+  value: zod.number(),
+  unit: zod.string(),
+  confidence: zod.enum(["high", "medium", "low"]),
+  sourceQuote: zod.string(),
+  editedByUser: zod.boolean(),
+  originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+});
+
+/**
+ * @summary Update one or more fields of an equation (human verification)
+ */
+export const PatchEquationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const PatchEquationBody = zod
+  .object({
+    label: zod.string().optional(),
+    latex: zod.string().min(1).optional(),
+    plaintext: zod.string().optional(),
+    meaning: zod.string().optional(),
+    variablesInvolved: zod.array(zod.string()).optional(),
+    confidence: zod.enum(["high", "medium", "low"]).optional(),
+    sourceQuote: zod.string().optional(),
+  })
+  .describe(
+    "Partial update for an equation. Only provided fields are changed.",
+  );
+
+export const PatchEquationResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  label: zod.string().describe('Short label, e.g. \"(1)\" or \"Eq. 3\".'),
+  latex: zod.string().describe("LaTeX representation of the equation."),
+  plaintext: zod.string().describe("Plain-text (ASCII) representation."),
+  meaning: zod
+    .string()
+    .describe("Human-readable explanation of what the equation represents."),
+  variablesInvolved: zod
+    .array(zod.string())
+    .describe("Symbols appearing in this equation."),
+  confidence: zod.enum(["high", "medium", "low"]),
+  description: zod
+    .string()
+    .describe(
+      "Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility.",
+    ),
+  sourceQuote: zod.string(),
+  editedByUser: zod
+    .boolean()
+    .describe("True if any field has been manually edited after extraction."),
+  originalValue: zod
+    .record(zod.string(), zod.unknown())
+    .nullish()
+    .describe(
+      "Snapshot of the row before the first human edit. Null if unedited.",
+    ),
+});
+
+/**
+ * @summary Reset an equation to its original extracted value
+ */
+export const ResetEquationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ResetEquationResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  label: zod.string().describe('Short label, e.g. \"(1)\" or \"Eq. 3\".'),
+  latex: zod.string().describe("LaTeX representation of the equation."),
+  plaintext: zod.string().describe("Plain-text (ASCII) representation."),
+  meaning: zod
+    .string()
+    .describe("Human-readable explanation of what the equation represents."),
+  variablesInvolved: zod
+    .array(zod.string())
+    .describe("Symbols appearing in this equation."),
+  confidence: zod.enum(["high", "medium", "low"]),
+  description: zod
+    .string()
+    .describe(
+      "Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility.",
+    ),
+  sourceQuote: zod.string(),
+  editedByUser: zod
+    .boolean()
+    .describe("True if any field has been manually edited after extraction."),
+  originalValue: zod
+    .record(zod.string(), zod.unknown())
+    .nullish()
+    .describe(
+      "Snapshot of the row before the first human edit. Null if unedited.",
+    ),
+});
+
+/**
+ * @summary Update one or more fields of an assumption or limitation (human verification)
+ */
+export const PatchAssumptionParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const PatchAssumptionBody = zod
+  .object({
+    text: zod.string().min(1).optional(),
+    kind: zod.enum(["assumption", "limitation"]).optional(),
+    sourceQuote: zod.string().optional(),
+    confidence: zod.enum(["high", "medium", "low"]).optional(),
+  })
+  .describe(
+    "Partial update for an assumption or limitation. Only provided fields are changed.",
+  );
+
+export const PatchAssumptionResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  kind: zod.enum(["assumption", "limitation"]),
+  text: zod.string(),
+  sourceQuote: zod.string(),
+  confidence: zod.enum(["high", "medium", "low"]),
+  editedByUser: zod.boolean(),
+  originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
+});
+
+/**
+ * @summary Reset an assumption/limitation to its original extracted value
+ */
+export const ResetAssumptionParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ResetAssumptionResponse = zod.object({
+  id: zod.number(),
+  ordinal: zod.number(),
+  kind: zod.enum(["assumption", "limitation"]),
+  text: zod.string(),
+  sourceQuote: zod.string(),
+  confidence: zod.enum(["high", "medium", "low"]),
+  editedByUser: zod.boolean(),
+  originalValue: zod.record(zod.string(), zod.unknown()).nullish(),
 });

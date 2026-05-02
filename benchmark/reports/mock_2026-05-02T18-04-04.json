@@ -1,0 +1,86 @@
+{
+  "runAt": "2026-05-02T18:04:04.520Z",
+  "provider": "mock",
+  "baseUrl": "http://localhost:80",
+  "results": [
+    {
+      "fixture": "batch_reactor_first_order",
+      "provider": "mock",
+      "schemaValid": false,
+      "variableScore": 0,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 0,
+      "overallScore": 0,
+      "notes": [
+        "Extraction failed or returned no model card"
+      ]
+    },
+    {
+      "fixture": "chemostat_monod",
+      "provider": "mock",
+      "schemaValid": false,
+      "variableScore": 0,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 0,
+      "overallScore": 0,
+      "notes": [
+        "Extraction failed or returned no model card"
+      ]
+    },
+    {
+      "fixture": "fed_batch_growth",
+      "provider": "mock",
+      "schemaValid": false,
+      "variableScore": 0,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 0,
+      "overallScore": 0,
+      "notes": [
+        "Extraction failed or returned no model card"
+      ]
+    },
+    {
+      "fixture": "gas_liquid_transfer",
+      "provider": "mock",
+      "schemaValid": false,
+      "variableScore": 0,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 0,
+      "overallScore": 0,
+      "notes": [
+        "Extraction failed or returned no model card"
+      ]
+    },
+    {
+      "fixture": "photobioreactor_light",
+      "provider": "mock",
+      "schemaValid": false,
+      "variableScore": 0,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 0,
+      "overallScore": 0,
+      "notes": [
+        "Extraction failed or returned no model card"
+      ]
+    }
+  ],
+  "summary": {
+    "meanVariableScore": 0,
+    "meanParameterScore": 0,
+    "meanEquationScore": 0,
+    "meanUnitScore": 0,
+    "meanMissingInfoScore": 0,
+    "meanOverallScore": 0,
+    "schemaPassRate": 0
+  }
+}

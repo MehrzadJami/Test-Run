@@ -5,11 +5,31 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+import type { EquationConfidence } from "./equationConfidence";
+import type { EquationOriginalValue } from "./equationOriginalValue";
 
 export interface Equation {
   id: number;
   ordinal: number;
+  /** Short label, e.g. "(1)" or "Eq. 3". */
+  label: string;
+  /** LaTeX representation of the equation. */
   latex: string;
+  /** Plain-text (ASCII) representation. */
+  plaintext: string;
+  /** Human-readable explanation of what the equation represents. */
+  meaning: string;
+  /** Symbols appearing in this equation. */
+  variablesInvolved: string[];
+  confidence: EquationConfidence;
+  /** Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility. */
   description: string;
   sourceQuote: string;
+  /** True if any field has been manually edited after extraction. */
+  editedByUser: boolean;
+  /**
+   * Snapshot of the row before the first human edit. Null if unedited.
+   * @nullable
+   */
+  originalValue?: EquationOriginalValue;
 }

@@ -1,0 +1,19 @@
+{
+  "fixture_name": "Gas-Liquid Oxygen Transfer",
+  "expected_variable_symbols": ["C", "X"],
+  "expected_variable_units": {
+    "c": "g/L",
+    "x": "g/L"
+  },
+  "expected_parameter_symbols": ["kLa", "Cstar", "qO2", "D"],
+  "expected_parameter_units": {
+    "kla": "1/h",
+    "cstar": "g/L",
+    "qo2": "g-O2/g-X/h",
+    "d": "1/h"
+  },
+  "expected_equation_symbol_sets": [
+    ["C", "kLa", "Cstar"],
+    ["C", "qO2", "X"]
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "fixture_name": "Photobioreactor Light-Limited Growth",
+  "expected_variable_symbols": ["X"],
+  "expected_variable_units": {
+    "x": "g/L"
+  },
+  "expected_parameter_symbols": ["mumax", "KI", "KiI", "I", "D"],
+  "expected_parameter_units": {
+    "mumax": "1/h",
+    "ki": "µmol/m²/s",
+    "kii": "µmol/m²/s",
+    "i": "µmol/m²/s",
+    "d": "1/h"
+  },
+  "expected_equation_symbol_sets": [
+    ["mu_L", "mumax", "I", "KI", "KiI"],
+    ["X", "mu_L", "D"]
+  ]
+}

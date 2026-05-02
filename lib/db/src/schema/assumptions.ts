@@ -1,4 +1,11 @@
-import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  serial,
+  text,
+  integer,
+  boolean,
+  jsonb,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { extractionsTable } from "./extractions";
@@ -14,6 +21,12 @@ export const assumptionsTable = pgTable("assumptions", {
     .notNull()
     .default("assumption"),
   text: text("text").notNull(),
+  sourceQuote: text("source_quote").notNull().default(""),
+  confidence: text("confidence", { enum: ["high", "medium", "low"] })
+    .notNull()
+    .default("medium"),
+  editedByUser: boolean("edited_by_user").notNull().default(false),
+  originalValue: jsonb("original_value"),
 });
 
 export const insertAssumptionSchema = createInsertSchema(assumptionsTable).omit(

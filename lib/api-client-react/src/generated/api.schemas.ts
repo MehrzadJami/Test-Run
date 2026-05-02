@@ -32,10 +32,73 @@ export interface ApiError {
   error: string;
 }
 
+export interface AuthUser {
+  id: string;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  firstName?: string | null;
+  /** @nullable */
+  lastName?: string | null;
+  /** @nullable */
+  profileImageUrl?: string | null;
+}
+
+export interface GetCurrentAuthUserResponse {
+  user: AuthUser | null;
+}
+
+export interface ExchangeMobileAuthorizationCodeBody {
+  code: string;
+  code_verifier: string;
+  redirect_uri: string;
+  state: string;
+  /** @nullable */
+  nonce?: string | null;
+}
+
+export interface ExchangeMobileAuthorizationCodeResponse {
+  token: string;
+}
+
+export interface LogoutMobileSessionResponse {
+  success: boolean;
+}
+
+export type UpdateProjectVisibilityInputVisibility =
+  (typeof UpdateProjectVisibilityInputVisibility)[keyof typeof UpdateProjectVisibilityInputVisibility];
+
+export const UpdateProjectVisibilityInputVisibility = {
+  private: "private",
+  public: "public",
+} as const;
+
+export interface UpdateProjectVisibilityInput {
+  visibility: UpdateProjectVisibilityInputVisibility;
+}
+
+/**
+ * Who can view this project. Private projects are only accessible to their owner.
+ */
+export type ProjectVisibility =
+  (typeof ProjectVisibility)[keyof typeof ProjectVisibility];
+
+export const ProjectVisibility = {
+  private: "private",
+  public: "public",
+} as const;
+
 export interface Project {
   id: number;
   name: string;
   description: string;
+  /**
+   * User ID of the project owner. Null for legacy/demo projects.
+   * @nullable
+   */
+  ownerId: string | null;
+  /** Who can view this project. Private projects are only accessible to their owner. */
+  visibility: ProjectVisibility;
   createdAt: string;
   updatedAt: string;
 }
@@ -146,12 +209,45 @@ export interface CreateExtractionInput {
   provider?: CreateExtractionInputProvider;
 }
 
+export type EquationConfidence =
+  (typeof EquationConfidence)[keyof typeof EquationConfidence];
+
+export const EquationConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * Snapshot of the row before the first human edit. Null if unedited.
+ * @nullable
+ */
+export type EquationOriginalValue = { [key: string]: unknown } | null;
+
 export interface Equation {
   id: number;
   ordinal: number;
+  /** Short label, e.g. "(1)" or "Eq. 3". */
+  label: string;
+  /** LaTeX representation of the equation. */
   latex: string;
+  /** Plain-text (ASCII) representation. */
+  plaintext: string;
+  /** Human-readable explanation of what the equation represents. */
+  meaning: string;
+  /** Symbols appearing in this equation. */
+  variablesInvolved: string[];
+  confidence: EquationConfidence;
+  /** Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility. */
   description: string;
   sourceQuote: string;
+  /** True if any field has been manually edited after extraction. */
+  editedByUser: boolean;
+  /**
+   * Snapshot of the row before the first human edit. Null if unedited.
+   * @nullable
+   */
+  originalValue?: EquationOriginalValue;
 }
 
 export type VariableRole = (typeof VariableRole)[keyof typeof VariableRole];
@@ -162,14 +258,34 @@ export const VariableRole = {
   output: "output",
 } as const;
 
+export type VariableConfidence =
+  (typeof VariableConfidence)[keyof typeof VariableConfidence];
+
+export const VariableConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * @nullable
+ */
+export type VariableOriginalValue = { [key: string]: unknown } | null;
+
 export interface Variable {
   id: number;
   ordinal: number;
   symbol: string;
   name: string;
+  /** Explanation of what the variable represents physically. */
+  meaning: string;
   unit: string;
   role: VariableRole;
+  confidence: VariableConfidence;
   sourceQuote: string;
+  editedByUser: boolean;
+  /** @nullable */
+  originalValue?: VariableOriginalValue;
 }
 
 export type ParameterConfidence =
@@ -181,14 +297,24 @@ export const ParameterConfidence = {
   low: "low",
 } as const;
 
+/**
+ * @nullable
+ */
+export type ParameterOriginalValue = { [key: string]: unknown } | null;
+
 export interface Parameter {
   id: number;
   ordinal: number;
   symbol: string;
+  /** Full descriptive name of the parameter. */
+  name: string;
   value: number;
   unit: string;
   confidence: ParameterConfidence;
   sourceQuote: string;
+  editedByUser: boolean;
+  /** @nullable */
+  originalValue?: ParameterOriginalValue;
 }
 
 export type AssumptionKind =
@@ -199,11 +325,135 @@ export const AssumptionKind = {
   limitation: "limitation",
 } as const;
 
+export type AssumptionConfidence =
+  (typeof AssumptionConfidence)[keyof typeof AssumptionConfidence];
+
+export const AssumptionConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * @nullable
+ */
+export type AssumptionOriginalValue = { [key: string]: unknown } | null;
+
 export interface Assumption {
   id: number;
   ordinal: number;
   kind: AssumptionKind;
   text: string;
+  sourceQuote: string;
+  confidence: AssumptionConfidence;
+  editedByUser: boolean;
+  /** @nullable */
+  originalValue?: AssumptionOriginalValue;
+}
+
+export type PatchVariableInputRole =
+  (typeof PatchVariableInputRole)[keyof typeof PatchVariableInputRole];
+
+export const PatchVariableInputRole = {
+  state: "state",
+  input: "input",
+  output: "output",
+} as const;
+
+export type PatchVariableInputConfidence =
+  (typeof PatchVariableInputConfidence)[keyof typeof PatchVariableInputConfidence];
+
+export const PatchVariableInputConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * Partial update for a variable. Only provided fields are changed.
+ */
+export interface PatchVariableInput {
+  /** @minLength 1 */
+  symbol?: string;
+  name?: string;
+  meaning?: string;
+  unit?: string;
+  role?: PatchVariableInputRole;
+  confidence?: PatchVariableInputConfidence;
+  sourceQuote?: string;
+}
+
+export type PatchParameterInputConfidence =
+  (typeof PatchParameterInputConfidence)[keyof typeof PatchParameterInputConfidence];
+
+export const PatchParameterInputConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * Partial update for a parameter. Only provided fields are changed.
+ */
+export interface PatchParameterInput {
+  /** @minLength 1 */
+  symbol?: string;
+  name?: string;
+  value?: number;
+  unit?: string;
+  confidence?: PatchParameterInputConfidence;
+  sourceQuote?: string;
+}
+
+export type PatchEquationInputConfidence =
+  (typeof PatchEquationInputConfidence)[keyof typeof PatchEquationInputConfidence];
+
+export const PatchEquationInputConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * Partial update for an equation. Only provided fields are changed.
+ */
+export interface PatchEquationInput {
+  label?: string;
+  /** @minLength 1 */
+  latex?: string;
+  plaintext?: string;
+  meaning?: string;
+  variablesInvolved?: string[];
+  confidence?: PatchEquationInputConfidence;
+  sourceQuote?: string;
+}
+
+export type PatchAssumptionInputKind =
+  (typeof PatchAssumptionInputKind)[keyof typeof PatchAssumptionInputKind];
+
+export const PatchAssumptionInputKind = {
+  assumption: "assumption",
+  limitation: "limitation",
+} as const;
+
+export type PatchAssumptionInputConfidence =
+  (typeof PatchAssumptionInputConfidence)[keyof typeof PatchAssumptionInputConfidence];
+
+export const PatchAssumptionInputConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+} as const;
+
+/**
+ * Partial update for an assumption or limitation. Only provided fields are changed.
+ */
+export interface PatchAssumptionInput {
+  /** @minLength 1 */
+  text?: string;
+  kind?: PatchAssumptionInputKind;
+  sourceQuote?: string;
+  confidence?: PatchAssumptionInputConfidence;
 }
 
 export type ModelCardExtractionProviderUsed =
@@ -232,6 +482,66 @@ export type ModelCardExtractionRawExtractionJson = {
   [key: string]: unknown;
 } | null;
 
+/**
+ * Raw provider response BEFORE JSON repair and Zod validation. Distinct from rawExtractionJson (post-validation canonical result). Null for mock provider (no API call made), legacy rows, and public share views.
+ * @nullable
+ */
+export type ModelCardExtractionRawProviderResponse = {
+  [key: string]: unknown;
+} | null;
+
+/**
+ * Whether the provider response required JSON repair before validation.
+ */
+export type ModelCardExtractionRepairStatus =
+  (typeof ModelCardExtractionRepairStatus)[keyof typeof ModelCardExtractionRepairStatus];
+
+export const ModelCardExtractionRepairStatus = {
+  not_needed: "not_needed",
+  repaired: "repaired",
+  failed: "failed",
+} as const;
+
+/**
+ * Token count and estimated cost metadata from the provider. Shape varies by provider (OpenAI vs Gemini). Null when unavailable (mock provider always returns null).
+ * @nullable
+ */
+export type ModelCardExtractionTokenUsage = { [key: string]: unknown } | null;
+
+/**
+ * Auto-detected model type from the rule-based domain classifier. "generic_ode" is the safe default for unknown models and legacy rows.
+ */
+export type ModelCardExtractionModelType =
+  (typeof ModelCardExtractionModelType)[keyof typeof ModelCardExtractionModelType];
+
+export const ModelCardExtractionModelType = {
+  chemostat: "chemostat",
+  batch_reactor: "batch_reactor",
+  fed_batch: "fed_batch",
+  cstr: "cstr",
+  gas_liquid_transfer: "gas_liquid_transfer",
+  microalgae_pbr: "microalgae_pbr",
+  generic_ode: "generic_ode",
+} as const;
+
+/**
+ * User-supplied model type override. When non-null, takes precedence over modelType in all frontend displays. Null means "use the classifier result".
+ * @nullable
+ */
+export type ModelCardExtractionModelTypeOverride =
+  | (typeof ModelCardExtractionModelTypeOverride)[keyof typeof ModelCardExtractionModelTypeOverride]
+  | null;
+
+export const ModelCardExtractionModelTypeOverride = {
+  chemostat: "chemostat",
+  batch_reactor: "batch_reactor",
+  fed_batch: "fed_batch",
+  cstr: "cstr",
+  gas_liquid_transfer: "gas_liquid_transfer",
+  microalgae_pbr: "microalgae_pbr",
+  generic_ode: "generic_ode",
+} as const;
+
 export type ModelCardExtraction = {
   id: number;
   projectId: number;
@@ -249,6 +559,40 @@ export type ModelCardExtraction = {
    * @nullable
    */
   rawExtractionJson: ModelCardExtractionRawExtractionJson;
+  /** Exact model identifier used by the provider (e.g. "gpt-4o", "gemini-1.5-flash", "mock"). Empty string for legacy rows. */
+  providerModel: string;
+  /** System prompt sent verbatim to the AI provider. Contains only instructional text — NO API keys or secrets. Empty string for mock provider, legacy rows, and public share views. */
+  systemPrompt: string;
+  /** One-line description of the extraction prompt template purpose. */
+  promptTemplateSummary: string;
+  /**
+   * Raw provider response BEFORE JSON repair and Zod validation. Distinct from rawExtractionJson (post-validation canonical result). Null for mock provider (no API call made), legacy rows, and public share views.
+   * @nullable
+   */
+  rawProviderResponse: ModelCardExtractionRawProviderResponse;
+  /** Whether the provider response required JSON repair before validation. */
+  repairStatus: ModelCardExtractionRepairStatus;
+  /**
+   * Zod validation error details if the extraction failed or required repair. Null when the extraction succeeded cleanly.
+   * @nullable
+   */
+  validationErrors: string | null;
+  /**
+   * Token count and estimated cost metadata from the provider. Shape varies by provider (OpenAI vs Gemini). Null when unavailable (mock provider always returns null).
+   * @nullable
+   */
+  tokenUsage: ModelCardExtractionTokenUsage;
+  /** Auto-detected model type from the rule-based domain classifier. "generic_ode" is the safe default for unknown models and legacy rows. */
+  modelType: ModelCardExtractionModelType;
+  /** Classifier confidence score in [0, 1]. Computed as score / (score + 10) from keyword evidence. 0 means no domain keywords were found. */
+  modelTypeConfidence: number;
+  /** Keywords and phrases from the source text / extracted fields that contributed to the auto-classification score. */
+  modelTypeMatchedKeywords: string[];
+  /**
+   * User-supplied model type override. When non-null, takes precedence over modelType in all frontend displays. Null means "use the classifier result".
+   * @nullable
+   */
+  modelTypeOverride: ModelCardExtractionModelTypeOverride;
   createdAt: string;
   updatedAt: string;
 };

@@ -1,9 +1,14 @@
 import { useMemo, useState } from "react";
 import { useParams, Link } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useGetModelCardByProject,
   useGetProject,
+  useUpdateProjectVisibility,
+  getGetModelCardByProjectQueryKey,
+  getGetProjectQueryKey,
 } from "@workspace/api-client-react";
+import { useAuth } from "@workspace/replit-auth-web";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,14 +24,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   AlertCircle,
   FileText,
@@ -44,6 +41,10 @@ import {
   TriangleAlert,
   Package,
   Loader2,
+  Globe,
+  Lock,
+  Share2,
+  Check,
 } from "lucide-react";
 import {
   analyzeReproducibility,
@@ -51,8 +52,22 @@ import {
   type MissingSeverity,
 } from "@/lib/reproducibility";
 import { runUnitCheck, type UnitCheckReport, type UnitWarnSeverity } from "@/lib/unit-checker";
+import {
+  runFormalDimensionalAnalysis,
+  type FormalCheckReport,
+  type FormalEqResult,
+} from "@/lib/dimensional-analysis";
 import { generatePythonOdeTemplate } from "@/lib/python-generator";
+import { matchTemplates, type TemplateScanResult, type RunnableTemplateStatus } from "@/lib/template-matcher";
 import { generateModelPackage } from "@/lib/package-generator";
+import { VariablesTab } from "@/components/model-card/VariablesTab";
+import { ParametersTab } from "@/components/model-card/ParametersTab";
+import { EquationsTab } from "@/components/model-card/EquationsTab";
+import { AssumptionsTab } from "@/components/model-card/AssumptionsTab";
+import { AuditTrailTab } from "@/components/model-card/AuditTrailTab";
+import { DomainChecklistTab } from "@/components/model-card/DomainChecklistTab";
+import { MODEL_TYPE_DISPLAY_NAMES, MODEL_TYPES } from "@workspace/domain-classifier";
+import type { ModelType } from "@workspace/domain-classifier";
 
 // ─── Local raw-extraction passthrough types ────────────────────────────────────
 
@@ -122,24 +137,6 @@ type RawExtraction = {
 };
 
 // ─── Small shared display components ─────────────────────────────────────────
-
-function ConfidenceBadge({ value }: { value?: Confidence }) {
-  if (!value) return null;
-  return (
-    <Badge
-      variant={
-        value === "high"
-          ? "default"
-          : value === "medium"
-            ? "secondary"
-            : "destructive"
-      }
-      className="text-[10px] uppercase ml-2"
-    >
-      {value}
-    </Badge>
-  );
-}
 
 function ChipList({ items }: { items: string[] }) {
   if (!items.length) {
@@ -295,6 +292,7 @@ const SEVERITY_CONFIG: Record<
 export default function ModelCardDetail() {
   const params = useParams();
   const projectId = Number(params.id);
+  const { user } = useAuth();
 
   const cardQuery = useGetModelCardByProject(projectId);
   const projectQuery = useGetProject(projectId);
@@ -315,7 +313,7 @@ export default function ModelCardDetail() {
     return <NotFound message="Model Card Not Found" />;
   }
 
-  const project = projectQuery.data;
+  const project = projectQuery.data ?? null;
   const { extraction, equations, variables, parameters, assumptions } =
     cardQuery.data;
   const assumptionItems = assumptions.filter((a) => a.kind === "assumption");
@@ -324,10 +322,19 @@ export default function ModelCardDetail() {
   const raw = extraction.rawExtractionJson as RawExtraction | null | undefined;
   const modelCard = raw?.model_card;
 
+  const isOwner =
+    !!user?.id &&
+    project !== null &&
+    "ownerId" in project &&
+    project.ownerId !== null &&
+    project.ownerId === user.id;
+
   return (
     <ModelCardDetailInner
       projectId={projectId}
       project={project}
+      extractionId={extraction.id}
+      isOwner={isOwner}
       extraction={extraction}
       equations={equations}
       variables={variables}
@@ -345,6 +352,8 @@ export default function ModelCardDetail() {
 function ModelCardDetailInner({
   projectId,
   project,
+  extractionId,
+  isOwner,
   extraction,
   equations,
   variables,
@@ -355,8 +364,11 @@ function ModelCardDetailInner({
   modelCard,
 }: {
   projectId: number;
-  project: { name: string } | null | undefined;
+  project: { name: string; ownerId: string | null; visibility: string } | null | undefined;
+  extractionId: number;
+  isOwner: boolean;
   extraction: {
+    id: number;
     domain: string;
     providerUsed: string;
     status: string;
@@ -365,15 +377,67 @@ function ModelCardDetailInner({
     problemStatement: string;
     odeTemplate: string;
     rawExtractionJson: unknown;
+    // M17 audit fields (empty/null for legacy rows)
+    providerModel: string;
+    systemPrompt: string;
+    promptTemplateSummary: string;
+    rawProviderResponse: Record<string, unknown> | null;
+    repairStatus: "not_needed" | "repaired" | "failed";
+    validationErrors: string | null;
+    tokenUsage: Record<string, unknown> | null;
+    // M19 domain classifier fields (defaults for legacy rows)
+    modelType: string;
+    modelTypeConfidence: number | null;
+    modelTypeMatchedKeywords: unknown;
+    modelTypeOverride: string | null;
+    createdAt: Date | string;
+    updatedAt: Date | string;
   };
-  equations: { id: number; latex: string; description: string; sourceQuote: string }[];
-  variables: { id: number; symbol: string; name: string; unit?: string | null; role: string; sourceQuote: string }[];
-  parameters: { id: number; symbol: string; value?: number | string | null; unit?: string | null; confidence: string; sourceQuote: string }[];
-  assumptionItems: { id: number; text: string; kind: string }[];
-  limitationItems: { id: number; text: string; kind: string }[];
+  equations: { id: number; ordinal: number; label: string; latex: string; plaintext: string; meaning: string; variablesInvolved: string[]; confidence: string; description: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
+  variables: { id: number; ordinal: number; symbol: string; name: string; meaning: string; unit: string; role: string; confidence: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
+  parameters: { id: number; ordinal: number; symbol: string; name: string; value: number; unit: string; confidence: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
+  assumptionItems: { id: number; ordinal: number; kind: string; text: string; sourceQuote: string; confidence: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
+  limitationItems: { id: number; ordinal: number; kind: string; text: string; sourceQuote: string; confidence: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
   raw: RawExtraction | null | undefined;
   modelCard: RawModelCard | null | undefined;
 }) {
+  const queryClient = useQueryClient();
+
+  // ── Visibility & sharing ──────────────────────────────────────────────────
+  const [copied, setCopied] = useState(false);
+  const visibility = project?.visibility ?? "public";
+  const isPublic = visibility === "public";
+
+  const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const shareUrl = `${window.location.origin}${base}/share/model-cards/${extractionId}`;
+
+  const visibilityMutation = useUpdateProjectVisibility({
+    mutation: {
+      onSuccess: () => {
+        void queryClient.invalidateQueries({
+          queryKey: getGetProjectQueryKey(projectId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: getGetModelCardByProjectQueryKey(projectId),
+        });
+      },
+    },
+  });
+
+  function toggleVisibility() {
+    visibilityMutation.mutate({
+      projectId,
+      data: { visibility: isPublic ? "private" : "public" },
+    });
+  }
+
+  function copyShareLink() {
+    void navigator.clipboard.writeText(shareUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
   // ── Reproducibility analysis (memoized — runs only when data changes) ──────
   const report = useMemo(
     () =>
@@ -398,6 +462,20 @@ function ModelCardDetailInner({
     [projectId, cardQuery_nonce(equations, variables, parameters)]
   );
 
+  // ── Formal dimensional analysis — M21 (memoized) ─────────────────────────
+  const formalReport = useMemo(
+    () => runFormalDimensionalAnalysis(equations, variables, parameters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters)]
+  );
+
+  // ── Template matcher — M22 (memoized) ────────────────────────────────────
+  const templateResult = useMemo<TemplateScanResult>(
+    () => matchTemplates(equations, variables, parameters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters)]
+  );
+
   // ── Python ODE template (memoized) ───────────────────────────────────────
   const pythonCode = useMemo(
     () =>
@@ -414,9 +492,10 @@ function ModelCardDetailInner({
         raw: raw ?? null,
         report,
         unitReport,
+        templateResult,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status]
+    [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status, templateResult]
   );
 
   // ── Model Package download (M9) ─────────────────────────────────────────
@@ -470,6 +549,13 @@ function ModelCardDetailInner({
     }
   }
 
+  // Count edited items for tab badge
+  const editedCount =
+    variables.filter((v) => v.editedByUser).length +
+    parameters.filter((p) => p.editedByUser).length +
+    equations.filter((e) => e.editedByUser).length +
+    [...assumptionItems, ...limitationItems].filter((a) => a.editedByUser).length;
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
       {/* ── Header ── */}
@@ -516,6 +602,35 @@ function ModelCardDetailInner({
               ? "✓ pass"
               : `${unitReport.warnings.filter((w) => w.severity === "high").length}H / ${unitReport.warnings.filter((w) => w.severity === "medium").length}M`}
           </Badge>
+          {/* M19: Domain model type badge */}
+          {(() => {
+            const rawType = extraction.modelTypeOverride ?? extraction.modelType;
+            const effectiveType = (MODEL_TYPES.includes(rawType as ModelType) ? rawType : "generic_ode") as ModelType;
+            const isOverride = !!extraction.modelTypeOverride;
+            return (
+              <Badge
+                variant="outline"
+                className={`text-[10px] font-mono ${
+                  effectiveType === "generic_ode"
+                    ? "text-muted-foreground border-muted-foreground/30"
+                    : "text-violet-700 border-violet-400 dark:text-violet-400"
+                }`}
+                title={
+                  isOverride
+                    ? `User override — classifier detected: ${MODEL_TYPE_DISPLAY_NAMES[extraction.modelType as ModelType] ?? extraction.modelType}`
+                    : `Auto-detected (${Math.round((extraction.modelTypeConfidence ?? 0) * 100)}% confidence)`
+                }
+              >
+                {isOverride ? "★ " : ""}
+                {MODEL_TYPE_DISPLAY_NAMES[effectiveType]}
+              </Badge>
+            );
+          })()}
+          {editedCount > 0 && (
+            <Badge variant="outline" className="text-[10px] font-mono text-amber-600 border-amber-400">
+              {editedCount} field{editedCount !== 1 ? "s" : ""} edited
+            </Badge>
+          )}
         </div>
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -537,6 +652,42 @@ function ModelCardDetailInner({
             ) : null}
           </div>
           <div className="flex gap-2 flex-wrap justify-end">
+            {/* Visibility toggle — owner only */}
+            {isOwner && (
+              <Button
+                variant="outline"
+                size="default"
+                onClick={toggleVisibility}
+                disabled={visibilityMutation.isPending}
+                title={isPublic ? "Click to make private" : "Click to make public"}
+                data-testid="btn-toggle-visibility"
+              >
+                {visibilityMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : isPublic ? (
+                  <Globe className="h-4 w-4 mr-2 text-emerald-600" />
+                ) : (
+                  <Lock className="h-4 w-4 mr-2 text-muted-foreground" />
+                )}
+                {isPublic ? "Public" : "Private"}
+              </Button>
+            )}
+            {/* Share link — visible whenever project is public */}
+            {isPublic && (
+              <Button
+                variant="outline"
+                size="default"
+                onClick={copyShareLink}
+                data-testid="btn-copy-share-link"
+              >
+                {copied ? (
+                  <Check className="h-4 w-4 mr-2 text-emerald-600" />
+                ) : (
+                  <Share2 className="h-4 w-4 mr-2" />
+                )}
+                {copied ? "Copied!" : "Share Link"}
+              </Button>
+            )}
             {raw?.model_card?.can_generate_ode_template && (
               <Link href="/simulation">
                 <Button
@@ -608,6 +759,12 @@ function ModelCardDetailInner({
                 ({unitReport.warnings.filter((w) => w.severity === "high").length})
               </span>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="domain-checklist" data-testid="tab-domain-checklist">
+            Domain Checklist
+          </TabsTrigger>
+          <TabsTrigger value="audit" data-testid="tab-audit">
+            Audit Trail
           </TabsTrigger>
           <TabsTrigger value="raw" data-testid="tab-raw">
             Raw JSON
@@ -689,258 +846,67 @@ function ModelCardDetailInner({
           ) : null}
         </TabsContent>
 
-        {/* ── Variables ── */}
+        {/* ── Variables (inline editing) ── */}
         <TabsContent value="variables" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>State &amp; Input Variables</CardTitle>
               <CardDescription>
-                Symbols, units, roles, and source context extracted from the
-                paper.
+                Click the pencil icon to correct any field. Changes are tracked and can be reset to the original AI output.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Symbol</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Unit</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead className="hidden md:table-cell w-1/3">
-                      Source Quote
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {variables.map((v, i) => (
-                    <TableRow key={v.id}>
-                      <TableCell className="font-mono font-bold text-primary">
-                        {v.symbol}
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        {v.name}
-                        <ConfidenceBadge
-                          value={raw?.state_variables?.[i]?.confidence}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <span
-                          className={`font-mono text-xs rounded px-2 py-1 ${v.unit ? "bg-muted/50" : "bg-destructive/10 text-destructive"}`}
-                        >
-                          {v.unit || "missing"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={v.role === "state" ? "default" : "outline"}
-                          className="text-[10px] uppercase"
-                        >
-                          {v.role}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground italic hidden md:table-cell">
-                        "{v.sourceQuote}"
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <VariablesTab
+                projectId={projectId}
+                variables={variables as Parameters<typeof VariablesTab>[0]["variables"]}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* ── Parameters ── */}
+        {/* ── Parameters (inline editing) ── */}
         <TabsContent value="parameters" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>Model Parameters</CardTitle>
               <CardDescription>
-                Numerical values, units, confidence scores, and source quotes.
+                Numerical values, units, confidence scores, and source quotes. Click the pencil icon to edit.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Symbol</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Value</TableHead>
-                    <TableHead>Unit</TableHead>
-                    <TableHead>Confidence</TableHead>
-                    <TableHead className="hidden md:table-cell w-1/4">
-                      Source Quote
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {parameters.map((p, i) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="font-mono font-bold text-primary">
-                        {p.symbol}
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        {raw?.parameters?.[i]?.name ?? "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {p.value ?? (
-                          <span className="text-destructive italic text-xs">
-                            missing
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <span
-                          className={`font-mono text-xs rounded px-2 py-1 ${p.unit ? "bg-muted/50" : "bg-destructive/10 text-destructive"}`}
-                        >
-                          {p.unit || "missing"}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <ConfidenceBadge value={p.confidence as Confidence} />
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground italic hidden md:table-cell">
-                        "{p.sourceQuote}"
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <ParametersTab
+                projectId={projectId}
+                parameters={parameters as Parameters<typeof ParametersTab>[0]["parameters"]}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* ── Equations ── */}
+        {/* ── Equations (inline editing) ── */}
         <TabsContent value="equations" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>Governing Equations</CardTitle>
               <CardDescription>
-                Extracted mathematical relationships with LaTeX, plaintext, and
-                source context.
+                Extracted mathematical relationships. Click the pencil icon to correct LaTeX, meaning, or source context.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[30%]">LaTeX</TableHead>
-                    <TableHead className="w-[20%]">Plaintext</TableHead>
-                    <TableHead className="w-[25%]">Meaning</TableHead>
-                    <TableHead className="w-[10%]">Confidence</TableHead>
-                    <TableHead className="w-[15%]">Source Quote</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {equations.map((eq, i) => (
-                    <TableRow key={eq.id}>
-                      <TableCell className="font-mono text-sm bg-muted/30 whitespace-pre-wrap font-medium">
-                        {eq.latex}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
-                        {raw?.equations?.[i]?.equation_plaintext ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {eq.description}
-                      </TableCell>
-                      <TableCell>
-                        <ConfidenceBadge
-                          value={raw?.equations?.[i]?.confidence}
-                        />
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground italic border-l border-border pl-3">
-                        "{eq.sourceQuote}"
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <EquationsTab
+                projectId={projectId}
+                equations={equations as Parameters<typeof EquationsTab>[0]["equations"]}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* ── Assumptions ── */}
+        {/* ── Assumptions (inline editing) ── */}
         <TabsContent value="assumptions" className="mt-6 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card className="bg-muted/30 border-muted-foreground/20">
-              <CardHeader>
-                <CardTitle className="text-base">Assumptions</CardTitle>
-                <CardDescription>
-                  Conditions taken as given in the model formulation.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {assumptionItems.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">
-                    No assumptions extracted.
-                  </p>
-                ) : (
-                  <ul className="space-y-3">
-                    {assumptionItems.map((item, i) => (
-                      <li key={item.id} className="text-sm">
-                        <div className="flex items-start gap-2">
-                          <span className="mt-0.5 text-muted-foreground">•</span>
-                          <div>
-                            {item.text}
-                            <ConfidenceBadge
-                              value={raw?.assumptions?.[i]?.confidence}
-                            />
-                            {raw?.assumptions?.[i]?.source_context ? (
-                              <p className="text-xs text-muted-foreground italic mt-1">
-                                "{raw.assumptions[i]!.source_context}"
-                              </p>
-                            ) : null}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="bg-destructive/5 border-destructive/20">
-              <CardHeader>
-                <CardTitle className="text-base text-destructive">
-                  Limitations
-                </CardTitle>
-                <CardDescription>
-                  Known boundaries and weaknesses of the model.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {limitationItems.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">
-                    No limitations extracted.
-                  </p>
-                ) : (
-                  <ul className="space-y-3">
-                    {limitationItems.map((item, i) => (
-                      <li
-                        key={item.id}
-                        className="text-sm text-destructive/90"
-                      >
-                        <div className="flex items-start gap-2">
-                          <span className="mt-0.5">•</span>
-                          <div>
-                            {item.text}
-                            <ConfidenceBadge
-                              value={raw?.limitations?.[i]?.confidence}
-                            />
-                            {raw?.limitations?.[i]?.source_context ? (
-                              <p className="text-xs text-muted-foreground italic mt-1">
-                                "{raw.limitations[i]!.source_context}"
-                              </p>
-                            ) : null}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <AssumptionsTab
+            projectId={projectId}
+            assumptionItems={assumptionItems as Parameters<typeof AssumptionsTab>[0]["assumptionItems"]}
+            limitationItems={limitationItems as Parameters<typeof AssumptionsTab>[0]["limitationItems"]}
+          />
         </TabsContent>
 
         {/* ── Missing Info (from model card) ── */}
@@ -982,7 +948,8 @@ function ModelCardDetailInner({
 
         {/* ── ODE Template ── */}
         <TabsContent value="ode" className="mt-6 space-y-4">
-          {/* Header card with download button */}
+
+          {/* ── Header row ── */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between flex-wrap gap-3">
@@ -992,9 +959,9 @@ function ModelCardDetailInner({
                     Python ODE Template
                   </CardTitle>
                   <CardDescription>
-                    Auto-generated scaffold using{" "}
-                    <code>scipy.integrate.solve_ivp</code>. Review all{" "}
-                    <code># TODO</code> comments before running.
+                    Auto-generated using <code>scipy.integrate.solve_ivp</code>.
+                    Supported equations are runnable; unsupported ones keep honest{" "}
+                    <code># TODO</code> stubs.
                   </CardDescription>
                 </div>
                 <Button
@@ -1008,7 +975,184 @@ function ModelCardDetailInner({
             </CardHeader>
           </Card>
 
-          {/* Readiness warning banner */}
+          {/* ── M22: Template status card ── */}
+          {(() => {
+            const s: RunnableTemplateStatus = templateResult.status;
+            const borderCls =
+              s === "full"
+                ? "border-emerald-300 bg-emerald-50/40 dark:bg-emerald-950/20"
+                : s === "partial"
+                ? "border-teal-300 bg-teal-50/40 dark:bg-teal-950/20"
+                : "border-slate-300 bg-slate-50/30 dark:bg-slate-950/10";
+            const icon =
+              s === "full" ? (
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+              ) : s === "partial" ? (
+                <Info className="h-5 w-5 text-teal-600 flex-shrink-0 mt-0.5" />
+              ) : (
+                <Code2 className="h-5 w-5 text-slate-500 flex-shrink-0 mt-0.5" />
+              );
+            const badgeCls =
+              s === "full"
+                ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                : s === "partial"
+                ? "bg-teal-100 text-teal-800 border-teal-300"
+                : "bg-slate-100 text-slate-600 border-slate-300";
+            const heading =
+              s === "full"
+                ? "All equations runnable"
+                : s === "partial"
+                ? `${templateResult.runnableCount} of ${templateResult.totalEquations} equations runnable`
+                : "No equations matched a supported template";
+            const subtext =
+              s === "full"
+                ? "Every equation in this model matched a supported template and all required symbols were found. The generated code runs directly."
+                : s === "partial"
+                ? "Some equations matched supported templates and generated runnable code. Unsupported equations have # TODO stubs — translate them manually."
+                : "None of the extracted equations matched a supported template. The generated code is a scaffold with # TODO stubs throughout. Supported templates are listed in the equation panel below.";
+            return (
+              <Card className={`border ${borderCls}`}>
+                <CardContent className="pt-4 pb-4">
+                  <div className="flex items-start gap-3">
+                    {icon}
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-semibold">{heading}</p>
+                        <Badge variant="outline" className={`text-[10px] px-2 ${badgeCls}`}>
+                          {s === "full" ? "full" : s === "partial" ? "partial" : "scaffold only"}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">{subtext}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* ── M22: Equation recognition panel ── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                Equation Recognition
+                <Badge variant="outline" className="text-[10px] px-2 bg-muted text-muted-foreground border-border">
+                  {templateResult.matched.length + templateResult.derivatives.length} recognised
+                  {templateResult.unmatched.length > 0 && ` · ${templateResult.unmatched.length} scaffold`}
+                </Badge>
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Supported templates: Monod growth kinetics, chemostat biomass ODE, chemostat substrate ODE,
+                first-order decay, gas–liquid transfer.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 pt-0">
+
+              {/* Recognised equations */}
+              {(templateResult.matched.length > 0 || templateResult.derivatives.length > 0) && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wide">
+                    Recognised equations
+                  </p>
+                  {[
+                    ...templateResult.matched.map((m) => ({
+                      label: m.templateLabel,
+                      eq: m.originalEquation,
+                      isRunnable: m.isRunnable,
+                      missing: m.missingSymbols,
+                      kind: "intermediate" as const,
+                    })),
+                    ...templateResult.derivatives.map((d) => ({
+                      label: d.templateLabel,
+                      eq: d.comment,
+                      isRunnable: d.isRunnable,
+                      missing: d.missingSymbols,
+                      kind: "ode" as const,
+                    })),
+                  ].map((item, i) => (
+                    <div
+                      key={i}
+                      className={`rounded border px-3 py-2 flex items-start gap-2 ${
+                        item.isRunnable
+                          ? "border-emerald-200 bg-emerald-50/40"
+                          : "border-amber-200 bg-amber-50/40"
+                      }`}
+                    >
+                      {item.isRunnable ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                      ) : (
+                        <TriangleAlert className="h-3.5 w-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className="text-[10px] px-1.5 bg-emerald-50 text-emerald-700 border-emerald-200">
+                            {item.label}
+                          </Badge>
+                          {item.kind === "ode" && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 bg-slate-50 text-slate-500 border-slate-200">
+                              derivative
+                            </Badge>
+                          )}
+                          {item.isRunnable ? (
+                            <span className="text-[10px] text-emerald-700">runnable</span>
+                          ) : (
+                            <span className="text-[10px] text-amber-700">
+                              missing: {item.missing.join(", ")}
+                            </span>
+                          )}
+                        </div>
+                        <p
+                          className="text-[11px] font-mono text-muted-foreground mt-0.5 truncate"
+                          title={item.eq}
+                        >
+                          {item.eq.length > 90 ? item.eq.slice(0, 90) + "…" : item.eq}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Unrecognised equations */}
+              {templateResult.unmatched.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+                    Scaffold-only (no pattern matched)
+                  </p>
+                  {templateResult.unmatched.map((u, i) => (
+                    <div
+                      key={i}
+                      className="rounded border border-slate-200 bg-slate-50/30 px-3 py-2 flex items-start gap-2"
+                    >
+                      <Code2 className="h-3.5 w-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className="text-[11px] font-mono text-muted-foreground truncate"
+                          title={u.originalEquation}
+                        >
+                          {u.originalEquation.length > 90
+                            ? u.originalEquation.slice(0, 90) + "…"
+                            : u.originalEquation}
+                        </p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          → # TODO stub — translate manually
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {templateResult.matched.length === 0 &&
+                templateResult.derivatives.length === 0 &&
+                templateResult.unmatched.length === 0 && (
+                <p className="text-xs text-muted-foreground italic text-center py-2">
+                  No equations extracted — check the Equations tab.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ── Reproducibility / unit warnings (existing) ── */}
           {report.simulation_readiness !== "ready" && (
             <Card className="border-amber-300 bg-amber-50/40 dark:bg-amber-950/20">
               <CardContent className="pt-4 pb-4">
@@ -1037,7 +1181,6 @@ function ModelCardDetailInner({
             </Card>
           )}
 
-          {/* Unit check warning banner */}
           {unitReport.unit_check_status === "fail" && (
             <Card className="border-red-300 bg-red-50/40 dark:bg-red-950/20">
               <CardContent className="pt-4 pb-4">
@@ -1057,7 +1200,7 @@ function ModelCardDetailInner({
             </Card>
           )}
 
-          {/* Code viewer */}
+          {/* ── Generated Python code ── */}
           <Card>
             <CardContent className="pt-4">
               <div className="flex justify-between items-center mb-2">
@@ -1084,7 +1227,6 @@ function ModelCardDetailInner({
 
         {/* ── Reproducibility ── */}
         <TabsContent value="reproducibility" className="mt-6 space-y-6">
-          {/* Overall score + readiness */}
           <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6">
             <Card className="flex flex-col items-center justify-center px-10 py-8 text-center min-w-[180px]">
               <p className="text-xs font-mono uppercase tracking-widest text-muted-foreground mb-2">
@@ -1134,10 +1276,8 @@ function ModelCardDetailInner({
             </Card>
           </div>
 
-          {/* Simulation readiness */}
           <ReadinessBadge readiness={report.simulation_readiness} />
 
-          {/* Main blockers */}
           {report.main_blockers.length > 0 && (
             <Card className="border-destructive/30">
               <CardHeader className="pb-3">
@@ -1166,7 +1306,6 @@ function ModelCardDetailInner({
             </Card>
           )}
 
-          {/* Missing items list */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold uppercase tracking-widest text-muted-foreground">
@@ -1209,7 +1348,6 @@ function ModelCardDetailInner({
             </CardContent>
           </Card>
 
-          {/* Recommended next steps */}
           <Card className="bg-primary/5 border-primary/20">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
@@ -1233,156 +1371,317 @@ function ModelCardDetailInner({
         </TabsContent>
 
         {/* ── Unit Check ── */}
-        <TabsContent value="unit-check" className="mt-6 space-y-4">
-          {/* Header card */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    {unitReport.unit_check_status === "pass" ? (
-                      <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                    ) : unitReport.unit_check_status === "warning" ? (
-                      <TriangleAlert className="h-5 w-5 text-amber-500" />
-                    ) : (
-                      <XCircle className="h-5 w-5 text-red-500" />
-                    )}
-                    Unit &amp; Dimension Check
-                  </CardTitle>
-                  <CardDescription className="mt-1">
-                    <span className="italic font-medium text-muted-foreground">
-                      MVP heuristic unit checker
-                    </span>{" "}
-                    — flags obvious problems only. Not a full symbolic dimensional-analysis engine.
-                  </CardDescription>
-                </div>
+        <TabsContent value="unit-check" className="mt-6 space-y-6">
+
+          {/* ── Section A: Formal Dimensional Analysis (M21) ── */}
+          <div className="space-y-3">
+            {/* Section header */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground">
+                Formal Dimensional Analysis
+              </h3>
+              <Badge variant="outline" className="text-[10px] px-2 bg-teal-50 text-teal-700 border-teal-300">
+                v2 · pattern-based
+              </Badge>
+              {formalReport.formalCheckAvailable && (
                 <Badge
-                  className={`text-sm px-3 py-1 ${
-                    unitReport.unit_check_status === "pass"
-                      ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
-                      : unitReport.unit_check_status === "warning"
-                      ? "bg-amber-100 text-amber-800 border border-amber-300"
-                      : "bg-red-100 text-red-800 border border-red-300"
+                  variant="outline"
+                  className={`text-[10px] px-2 ${
+                    formalReport.status === "pass"
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                      : formalReport.status === "warning"
+                      ? "bg-amber-50 text-amber-700 border-amber-300"
+                      : "bg-red-50 text-red-700 border-red-300"
                   }`}
                 >
-                  {unitReport.unit_check_status === "pass"
-                    ? "✓ Pass"
-                    : unitReport.unit_check_status === "warning"
-                    ? "⚠ Warning"
-                    : "✗ Fail"}
+                  {formalReport.status === "pass" ? "✓ pass" : formalReport.status === "warning" ? "⚠ warning" : "✗ fail"}
                 </Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {/* Summary counts */}
-              <div className="flex gap-4 flex-wrap text-sm">
-                {(["high", "medium", "low"] as UnitWarnSeverity[]).map((sev) => {
-                  const count = unitReport.warnings.filter((w) => w.severity === sev).length;
-                  const color =
-                    sev === "high"
-                      ? "text-red-600"
-                      : sev === "medium"
-                      ? "text-amber-600"
-                      : "text-slate-500";
-                  return (
-                    <span key={sev} className={`font-mono font-medium ${color}`}>
-                      {count} {sev}
-                    </span>
-                  );
-                })}
-                <span className="text-muted-foreground">
-                  · {unitReport.warnings.length} total
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+              )}
+            </div>
 
-          {/* Warnings list */}
-          {unitReport.warnings.length === 0 ? (
-            <Card>
-              <CardContent className="pt-8 pb-8 text-center">
-                <CheckCircle2 className="h-10 w-10 text-emerald-500 mx-auto mb-3" />
-                <p className="text-sm font-medium text-emerald-700">No unit issues found.</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  All checked symbols have units, ODE derivative units are traceable, and no mixed time scales were detected.
+            {/* Supported-patterns legend */}
+            <Card className="border-teal-100 bg-teal-50/30">
+              <CardContent className="pt-4 pb-4">
+                <p className="text-xs font-medium text-teal-800 mb-2">
+                  Supported equation patterns ({formalReport.parsedCount} matched in this model):
+                </p>
+                <ul className="space-y-0.5">
+                  {formalReport.supportedPatterns.map((p, i) => (
+                    <li key={i} className="text-[11px] text-teal-700 font-mono">· {p}</li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-muted-foreground mt-3 italic">
+                  Equations not matching a supported pattern are skipped — see the heuristic check below.
                 </p>
               </CardContent>
             </Card>
-          ) : (
-            (["high", "medium", "low"] as UnitWarnSeverity[]).map((sev) => {
-              const group = unitReport.warnings.filter((w) => w.severity === sev);
-              if (group.length === 0) return null;
-              const groupColor =
-                sev === "high"
-                  ? "border-red-200 bg-red-50/40"
-                  : sev === "medium"
-                  ? "border-amber-200 bg-amber-50/40"
-                  : "border-slate-200 bg-slate-50/30";
-              const badgeColor =
-                sev === "high"
-                  ? "bg-red-100 text-red-700 border-red-300"
-                  : sev === "medium"
-                  ? "bg-amber-100 text-amber-700 border-amber-300"
-                  : "bg-slate-100 text-slate-600 border-slate-300";
-              const icon =
-                sev === "high" ? (
-                  <XCircle className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
-                ) : sev === "medium" ? (
-                  <TriangleAlert className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                ) : (
-                  <Info className="h-4 w-4 text-slate-400 flex-shrink-0 mt-0.5" />
-                );
-              return (
-                <Card key={sev} className={`border ${groupColor}`}>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider">
-                      <Badge variant="outline" className={`text-[10px] px-2 ${badgeColor}`}>
-                        {sev}
-                      </Badge>
-                      {sev === "high"
-                        ? "High — must fix before simulation"
-                        : sev === "medium"
-                        ? "Medium — should verify"
-                        : "Low — minor / informational"}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {group.map((w, i) => (
-                      <div
-                        key={i}
-                        className="rounded-md border border-white/60 bg-white/70 dark:bg-background/50 p-3 space-y-1.5"
-                      >
-                        <div className="flex items-start gap-2">
-                          {icon}
-                          <p className="text-sm font-medium leading-snug">{w.message}</p>
-                        </div>
-                        {w.equation_or_symbol && (
-                          <p className="text-xs text-muted-foreground font-mono pl-6">
-                            Affected:{" "}
-                            <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
-                              {w.equation_or_symbol}
-                            </code>
-                          </p>
-                        )}
-                        {w.suggestion && (
-                          <p className="text-xs text-muted-foreground pl-6 leading-relaxed">
-                            <span className="font-medium text-foreground">Suggestion:</span>{" "}
-                            {w.suggestion}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              );
-            })
-          )}
 
-          {/* Footer note */}
-          <p className="text-xs text-muted-foreground text-center italic pt-2">
-            This checker applies heuristic rules to common chemical-engineering ODE models.
-            It cannot algebraically balance complex unit expressions — use a CAS or domain expert for definitive dimensional analysis.
+            {/* Per-equation results */}
+            {formalReport.equationResults.length === 0 || !formalReport.formalCheckAvailable ? (
+              <Card className="border-dashed border-teal-200">
+                <CardContent className="pt-6 pb-6 text-center">
+                  <Info className="h-8 w-8 text-teal-400 mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">
+                    No equations matched a supported pattern.
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Formal dimensional analysis requires recognised equation structures. Use the heuristic check below for general symbol and unit validation.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-2">
+                {formalReport.equationResults
+                  .filter((r) => r.parsed)
+                  .map((r: FormalEqResult, i: number) => {
+                    const hasIssues = r.issues.length > 0;
+                    const cardCls = r.dimensionsMatch === false
+                      ? "border-red-200 bg-red-50/30"
+                      : hasIssues
+                      ? "border-amber-200 bg-amber-50/30"
+                      : r.dimensionsMatch === true
+                      ? "border-emerald-200 bg-emerald-50/30"
+                      : "border-slate-200 bg-slate-50/20";
+                    const statusIcon =
+                      r.dimensionsMatch === false ? (
+                        <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                      ) : hasIssues ? (
+                        <TriangleAlert className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                      ) : r.dimensionsMatch === true ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
+                      ) : (
+                        <Info className="h-4 w-4 text-slate-400 flex-shrink-0" />
+                      );
+                    return (
+                      <Card key={i} className={`border ${cardCls}`}>
+                        <CardContent className="pt-4 pb-4 space-y-2">
+                          <div className="flex items-start gap-2">
+                            {statusIcon}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Badge variant="outline" className="text-[10px] px-1.5 bg-teal-50 text-teal-700 border-teal-200">
+                                  {r.patternName}
+                                </Badge>
+                                {r.dimensionsMatch === true && (
+                                  <span className="text-[11px] text-emerald-700 font-medium">dimensionally consistent</span>
+                                )}
+                                {r.dimensionsMatch === false && (
+                                  <span className="text-[11px] text-red-700 font-medium">dimension mismatch</span>
+                                )}
+                                {r.dimensionsMatch === null && !hasIssues && (
+                                  <span className="text-[11px] text-slate-500">LHS dimension inferred</span>
+                                )}
+                              </div>
+                              <p className="text-xs font-mono text-muted-foreground mt-1 truncate" title={r.equation}>
+                                {r.equation.length > 80 ? r.equation.slice(0, 80) + "…" : r.equation}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Dimension comparison */}
+                          {(r.lhsDimLabel || r.rhsDimLabel) && (
+                            <div className="flex gap-4 flex-wrap pl-6 text-[11px]">
+                              {r.lhsDimLabel && (
+                                <span className="font-mono">
+                                  <span className="text-muted-foreground">LHS: </span>
+                                  <code className="bg-muted px-1 py-0.5 rounded">[{r.lhsDimLabel}]</code>
+                                </span>
+                              )}
+                              {r.rhsDimLabel && (
+                                <span className="font-mono">
+                                  <span className="text-muted-foreground">RHS: </span>
+                                  <code className="bg-muted px-1 py-0.5 rounded">[{r.rhsDimLabel}]</code>
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Issues */}
+                          {r.issues.length > 0 && (
+                            <div className="pl-6 space-y-1">
+                              {r.issues.map((issue, j) => (
+                                <p key={j} className="text-xs text-amber-800 leading-snug">
+                                  · {issue}
+                                </p>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Symbols checked */}
+                          {r.symbolsChecked.length > 0 && (
+                            <p className="pl-6 text-[10px] text-muted-foreground">
+                              Symbols checked:{" "}
+                              {r.symbolsChecked.map((s, j) => (
+                                <code key={j} className="bg-muted px-1 rounded mr-1">{s}</code>
+                              ))}
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+              </div>
+            )}
+          </div>
+
+          {/* ── Divider ── */}
+          <div className="border-t border-dashed border-muted-foreground/20 pt-2" />
+
+          {/* ── Section B: Heuristic Check (existing, M18) ── */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground">
+                Heuristic Check
+              </h3>
+              <Badge variant="outline" className="text-[10px] px-2 bg-slate-50 text-slate-600 border-slate-300">
+                v1 · symbol &amp; convention rules
+              </Badge>
+              <Badge
+                variant="outline"
+                className={`text-[10px] px-2 ${
+                  unitReport.unit_check_status === "pass"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                    : unitReport.unit_check_status === "warning"
+                    ? "bg-amber-50 text-amber-700 border-amber-300"
+                    : "bg-red-50 text-red-700 border-red-300"
+                }`}
+              >
+                {unitReport.unit_check_status === "pass"
+                  ? "✓ pass"
+                  : unitReport.unit_check_status === "warning"
+                  ? "⚠ warning"
+                  : "✗ fail"}
+              </Badge>
+            </div>
+
+            <Card className="border-slate-100 bg-slate-50/20">
+              <CardContent className="pt-4 pb-4">
+                <p className="text-xs text-muted-foreground italic">
+                  Checks for missing units, undefined symbols, kinetic convention mismatches, and mixed time scales.
+                  Applies to all equations regardless of pattern. Does not algebraically balance unit expressions.
+                </p>
+                <div className="flex gap-4 flex-wrap mt-3 text-sm">
+                  {(["high", "medium", "low"] as UnitWarnSeverity[]).map((sev) => {
+                    const count = unitReport.warnings.filter((w) => w.severity === sev).length;
+                    const color = sev === "high" ? "text-red-600" : sev === "medium" ? "text-amber-600" : "text-slate-500";
+                    return (
+                      <span key={sev} className={`font-mono font-medium ${color}`}>
+                        {count} {sev}
+                      </span>
+                    );
+                  })}
+                  <span className="text-muted-foreground">· {unitReport.warnings.length} total</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {unitReport.warnings.length === 0 ? (
+              <Card>
+                <CardContent className="pt-6 pb-6 text-center">
+                  <CheckCircle2 className="h-9 w-9 text-emerald-500 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-emerald-700">No heuristic issues found.</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    All symbols have units, ODE derivative units are traceable, and no mixed time scales were detected.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              (["high", "medium", "low"] as UnitWarnSeverity[]).map((sev) => {
+                const group = unitReport.warnings.filter((w) => w.severity === sev);
+                if (group.length === 0) return null;
+                const groupColor =
+                  sev === "high"
+                    ? "border-red-200 bg-red-50/40"
+                    : sev === "medium"
+                    ? "border-amber-200 bg-amber-50/40"
+                    : "border-slate-200 bg-slate-50/30";
+                const badgeColor =
+                  sev === "high"
+                    ? "bg-red-100 text-red-700 border-red-300"
+                    : sev === "medium"
+                    ? "bg-amber-100 text-amber-700 border-amber-300"
+                    : "bg-slate-100 text-slate-600 border-slate-300";
+                const icon =
+                  sev === "high" ? (
+                    <XCircle className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
+                  ) : sev === "medium" ? (
+                    <TriangleAlert className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <Info className="h-4 w-4 text-slate-400 flex-shrink-0 mt-0.5" />
+                  );
+                return (
+                  <Card key={sev} className={`border ${groupColor}`}>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider">
+                        <Badge variant="outline" className={`text-[10px] px-2 ${badgeColor}`}>
+                          {sev}
+                        </Badge>
+                        {sev === "high"
+                          ? "High — must fix before simulation"
+                          : sev === "medium"
+                          ? "Medium — should verify"
+                          : "Low — minor / informational"}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {group.map((w, i) => (
+                        <div
+                          key={i}
+                          className="rounded-md border border-white/60 bg-white/70 dark:bg-background/50 p-3 space-y-1.5"
+                        >
+                          <div className="flex items-start gap-2">
+                            {icon}
+                            <p className="text-sm font-medium leading-snug">{w.message}</p>
+                          </div>
+                          {w.equation_or_symbol && (
+                            <p className="text-xs text-muted-foreground font-mono pl-6">
+                              Affected:{" "}
+                              <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
+                                {w.equation_or_symbol}
+                              </code>
+                            </p>
+                          )}
+                          {w.suggestion && (
+                            <p className="text-xs text-muted-foreground pl-6 leading-relaxed">
+                              <span className="font-medium text-foreground">Suggestion:</span>{" "}
+                              {w.suggestion}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                );
+              })
+            )}
+          </div>
+
+          <p className="text-xs text-muted-foreground text-center italic pt-1">
+            Formal analysis checks dimensional consistency for recognised patterns only.
+            Heuristic analysis covers all symbols and flags convention violations.
+            Neither replaces a domain expert or computer algebra system for definitive verification.
           </p>
+        </TabsContent>
+
+        {/* ── Domain Checklist (M19) ── */}
+        <TabsContent value="domain-checklist" className="mt-6">
+          <DomainChecklistTab
+            extraction={{
+              id: extraction.id,
+              modelType: extraction.modelType,
+              modelTypeConfidence: extraction.modelTypeConfidence ?? 0,
+              modelTypeMatchedKeywords: (extraction.modelTypeMatchedKeywords as string[]) ?? [],
+              modelTypeOverride: extraction.modelTypeOverride ?? null,
+            }}
+            variables={variables.map((v) => ({ symbol: v.symbol, name: v.name }))}
+            parameters={parameters.map((p) => ({ symbol: p.symbol, name: p.name }))}
+            onOverrideSuccess={() => queryClient.invalidateQueries({ queryKey: getGetModelCardByProjectQueryKey(projectId) })}
+          />
+        </TabsContent>
+
+        {/* ── Audit Trail (M17) ── */}
+        <TabsContent value="audit" className="mt-6">
+          <AuditTrailTab extraction={extraction} />
         </TabsContent>
 
         {/* ── Raw JSON ── */}
@@ -1433,8 +1732,7 @@ function downloadTextFile(content: string, filename: string): void {
 
 /**
  * Tiny cache-key helper: returns a number that changes whenever the data
- * arrays change identity. Avoids useMemo re-running on every render when
- * data is stable.
+ * arrays change identity.
  */
 function cardQuery_nonce(
   equations: { id: number }[],

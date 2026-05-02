@@ -1,0 +1,69 @@
+Start M18: Multi-Source Projects and Conflict Detection.
+
+Important rules:
+Do not break existing single-source workflow.
+Keep the current model card view working.
+Add multi-source support incrementally.
+
+Goal:
+Allow one project to contain multiple source documents and multiple extractions, then generate an aggregated project-level model card with conflict detection.
+
+Use case:
+A researcher adds 3 papers about the same chemostat model. The app should detect when parameters, equations, or units conflict across sources.
+
+Requirements:
+
+1. Source management:
+   - show all source documents in a project
+   - allow adding another pasted text source
+   - allow adding another PDF source using existing PDF parser
+   - show source type, date, character count, and extraction status
+
+2. Multiple extractions:
+   - allow extraction per source
+   - list extraction history per project
+   - allow opening individual extraction model cards
+
+3. Aggregated model card:
+   - create a project-level "Aggregated Model Card" view
+   - merge variables by symbol
+   - merge parameters by symbol
+   - merge equations by normalized label/symbol pattern if simple
+   - merge assumptions/limitations
+
+4. Conflict detection:
+   Flag conflicts when:
+   - same parameter symbol has different values
+   - same parameter symbol has different units
+   - same variable symbol has different meanings or units
+   - similar equation labels have different equations
+   - one source includes a parameter another source lacks
+
+Conflict object:
+{
+  "type": "parameter_value/unit/variable_definition/equation/missing_across_sources",
+  "symbol_or_label": "...",
+  "severity": "low/medium/high",
+  "sources": ["..."],
+  "details": "...",
+  "recommendation": "..."
+}
+
+Frontend:
+Add:
+- Sources tab on project/model card
+- Aggregated Model Card view
+- Conflicts tab
+- Source filter dropdown
+
+Requirements:
+1. Do not overcomplicate semantic equation matching.
+2. Start with symbol-based and unit/value-based conflict detection.
+3. Export aggregated model package if practical; otherwise export individual packages and conflict report.
+4. Existing single-source demo must still work.
+
+After finishing:
+- Tell me how multi-source data flows
+- Tell me how conflicts are detected
+- Tell me how to test with two sources
+- Confirm tests/build pass

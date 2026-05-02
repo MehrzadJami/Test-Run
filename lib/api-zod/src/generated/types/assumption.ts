@@ -5,11 +5,18 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+import type { AssumptionConfidence } from "./assumptionConfidence";
 import type { AssumptionKind } from "./assumptionKind";
+import type { AssumptionOriginalValue } from "./assumptionOriginalValue";
 
 export interface Assumption {
   id: number;
   ordinal: number;
   kind: AssumptionKind;
   text: string;
+  sourceQuote: string;
+  confidence: AssumptionConfidence;
+  editedByUser: boolean;
+  /** @nullable */
+  originalValue?: AssumptionOriginalValue;
 }

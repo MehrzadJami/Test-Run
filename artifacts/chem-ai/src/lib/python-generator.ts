@@ -14,6 +14,8 @@
 
 import type { AnalysisEquation, AnalysisVariable, AnalysisParameter, AnalysisAssumption, RawExtraction, ReproducibilityReport } from "./reproducibility";
 import type { UnitCheckReport } from "./unit-checker";
+import { normalizeEqText } from "./dimensional-analysis";
+import type { TemplateScanResult } from "./template-matcher";
 
 // ─── Public input / output types ──────────────────────────────────────────────
 
@@ -30,6 +32,8 @@ export interface PythonGeneratorInput {
   raw: RawExtraction | null;
   report: ReproducibilityReport;
   unitReport: UnitCheckReport;
+  /** M22 template scan result — when provided, replaces TODO stubs with runnable code */
+  templateResult?: TemplateScanResult;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -103,6 +107,7 @@ export function generatePythonOdeTemplate(input: PythonGeneratorInput): string {
     raw,
     report,
     unitReport,
+    templateResult,
   } = input;
 
   const stateVars   = variables.filter((v) => v.role === "state");
@@ -116,6 +121,14 @@ export function generatePythonOdeTemplate(input: PythonGeneratorInput): string {
   const parts: string[] = [];
 
   // ── Header ────────────────────────────────────────────────────────────────
+  const tmplStatusLabel = templateResult
+    ? templateResult.status === "full"
+      ? "full — all equations runnable"
+      : templateResult.status === "partial"
+      ? `partial — ${templateResult.runnableCount}/${templateResult.totalEquations} equations runnable`
+      : "scaffold only — no equations matched a supported template"
+    : "not computed";
+
   parts.push(`${DIVIDER}
 # ChemAI Model Compiler — Generated Python ODE Template
 ${DIVIDER}
@@ -125,13 +138,15 @@ ${DIVIDER}
 # Provider    : ${providerUsed}
 # Generated   : ${dateStr}
 #
-# Reproducibility score : ${report.overall_score}/100  (${readyLabel})
-# Unit check status     : ${unitReport.unit_check_status}  (${highCount} high, ${medCount} medium)
+# Reproducibility score   : ${report.overall_score}/100  (${readyLabel})
+# Unit check status       : ${unitReport.unit_check_status}  (${highCount} high, ${medCount} medium)
+# Runnable template status: ${tmplStatusLabel}
 ${DIVIDER}
 #
 # IMPORTANT: This template was auto-generated from extracted model data.
 #   - Review ALL TODO comments before running.
-#   - Equations are shown as comments; translate them to Python carefully.
+#   - Equations marked "# TODO: implement" were not matched to a supported
+#     template and must be translated manually.
 #   - Parameter values come from the source document — verify units.
 #   - Do NOT treat this as a verified simulation without expert review.
 #`);
@@ -322,29 +337,65 @@ import matplotlib.pyplot as plt
       const isDerivative = /d[A-Za-z]+\s*\/\s*dt/.test(latex) || /d[A-Za-z]+\s*\/\s*dt/.test(plain);
       if (!isDerivative) {
         const label = safeStr(eq.label) || `Eq ${i + 1}`;
+        // Check if this equation was matched by a template
+        const eqNorm = normalizeEqText(latex || plain);
+        const tmplMatch = templateResult?.matched.find(
+          (m) => normalizeEqText(m.originalEquation) === eqNorm,
+        );
         parts.push(`    # ${THIN.replace("# ", "")} `);
         parts.push(`    # Eq ${i + 1} — ${label}`);
-        if (latex) parts.push(`    # TODO: implement: ${latex}`);
-        // Extract likely variable name from label or latex
-        const lhs = extractLhsSymbol(latex || plain);
-        parts.push(`    ${lhs ?? "result"} = 0.0  # TODO: translate from equation above`);
+        if (tmplMatch && tmplMatch.isRunnable) {
+          parts.push(`    # Template: ${tmplMatch.templateLabel}`);
+          parts.push(`    ${tmplMatch.pythonCode}`);
+        } else if (tmplMatch && !tmplMatch.isRunnable) {
+          parts.push(`    # Template: ${tmplMatch.templateLabel}  (missing: ${tmplMatch.missingSymbols.join(", ")})`);
+          if (latex) parts.push(`    # TODO: implement: ${latex}`);
+          const lhs = extractLhsSymbol(latex || plain);
+          parts.push(`    ${lhs ?? "result"} = 0.0  # TODO: add missing symbols first`);
+        } else {
+          if (latex) parts.push(`    # TODO: implement: ${latex}`);
+          const lhs = extractLhsSymbol(latex || plain);
+          parts.push(`    ${lhs ?? "result"} = 0.0  # TODO: translate from equation above`);
+        }
       }
     }
 
     parts.push(`\n    # ── Derivatives ─────────────────────────────────────────────────────`);
     for (let i = 0; i < stateVars.length; i++) {
-      const v      = stateVars[i];
-      const dname  = `d${v.symbol}dt`;
-      // Find the matching derivative equation
-      const matchEq = eqsToShow.find((eq) => {
-        const text = safeStr(eq.equation_latex) + " " + safeStr(eq.equation_plaintext);
-        return new RegExp(`d${v.symbol}\\s*\\/\\s*dt`, "i").test(text);
-      });
-      const comment = matchEq
-        ? `# d${v.symbol}/dt — see Eq: ${safeStr(matchEq.equation_latex) || safeStr(matchEq.label)}`
-        : `# d${v.symbol}/dt — TODO: no matching equation found`;
-      parts.push(`    ${comment}`);
-      parts.push(`    ${dname} = 0.0  # TODO: implement`);
+      const v     = stateVars[i];
+      const dname = `d${v.symbol}dt`;
+      // Check if template matcher provided a runnable derivative for this state var
+      const tmplDeriv = templateResult?.derivatives.find(
+        (d) => d.stateSym.toLowerCase() === v.symbol.toLowerCase(),
+      );
+      if (tmplDeriv && tmplDeriv.isRunnable && tmplDeriv.pythonLine) {
+        const refEq = tmplDeriv.comment.length > 80
+          ? tmplDeriv.comment.slice(0, 80) + "…"
+          : tmplDeriv.comment;
+        parts.push(`    # d${v.symbol}/dt — ${tmplDeriv.templateLabel}`);
+        parts.push(`    # Equation: ${refEq}`);
+        parts.push(`    ${tmplDeriv.pythonLine}`);
+      } else if (tmplDeriv && !tmplDeriv.isRunnable) {
+        // Matched but incomplete — show partial info
+        const matchEq = eqsToShow.find((eq) => {
+          const text = safeStr(eq.equation_latex) + " " + safeStr(eq.equation_plaintext);
+          return new RegExp(`d${v.symbol}\\s*\\/\\s*dt`, "i").test(text);
+        });
+        parts.push(`    # d${v.symbol}/dt — ${tmplDeriv.templateLabel}  (missing: ${tmplDeriv.missingSymbols.join(", ")})`);
+        if (matchEq) parts.push(`    # Equation: ${safeStr(matchEq.equation_latex) || safeStr(matchEq.label)}`);
+        parts.push(`    ${dname} = 0.0  # TODO: add missing symbols: ${tmplDeriv.missingSymbols.join(", ")}`);
+      } else {
+        // No template matched — honest scaffold
+        const matchEq = eqsToShow.find((eq) => {
+          const text = safeStr(eq.equation_latex) + " " + safeStr(eq.equation_plaintext);
+          return new RegExp(`d${v.symbol}\\s*\\/\\s*dt`, "i").test(text);
+        });
+        const comment = matchEq
+          ? `# d${v.symbol}/dt — see Eq: ${safeStr(matchEq.equation_latex) || safeStr(matchEq.label)}`
+          : `# d${v.symbol}/dt — TODO: no matching equation found`;
+        parts.push(`    ${comment}`);
+        parts.push(`    ${dname} = 0.0  # TODO: implement`);
+      }
     }
     if (stateVars.length === 0) {
       parts.push(`    # TODO: add derivative calculations for each state variable`);

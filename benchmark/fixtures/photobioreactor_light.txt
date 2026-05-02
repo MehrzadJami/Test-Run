@@ -1,0 +1,56 @@
+Photobioreactor Model with Light-Limited Growth and Photoinhibition
+
+This document describes a kinetic model for microalgal growth in a photobioreactor,
+where light is the primary energy source. The model accounts for both light limitation
+at low intensities and photoinhibition at high intensities using the Haldane-type
+Andrews kinetic expression for light.
+
+System Description:
+A continuous photobioreactor (flat-panel or tubular) is illuminated at incident light
+intensity I. Microalgae (biomass X) grow using light energy and CO2. Light is attenuated
+within the culture according to Beer-Lambert law, but this model uses the surface
+incident intensity as representative. The bioreactor is operated continuously with
+dilution rate D.
+
+State Variables:
+- X: microalgal biomass concentration (g/L) — dry weight of algae per litre
+
+Parameters:
+- mumax: maximum specific growth rate at optimal light intensity = 0.25 1/h
+- KI: half-saturation constant for light = 80 µmol/m²/s (light level for half-maximum growth)
+- KiI: photoinhibition constant = 500 µmol/m²/s (inhibition coefficient for light)
+- I: incident light intensity = 200 µmol/m²/s (photon flux density at reactor surface)
+- D: dilution rate = 0.10 1/h
+
+Governing Equations:
+Light-limited specific growth rate (Haldane/Andrews kinetics for light):
+  mu_L = mumax * I / (KI + I + I^2 / KiI)
+
+Biomass balance (continuous operation):
+  dX/dt = (mu_L - D) * X
+
+At steady state:
+  X_ss = (mu_L - D) * X = 0, so mu_L = D at steady state if X > 0
+
+Optimal light intensity for maximum growth rate:
+  I_opt = sqrt(KI * KiI)
+
+At I = 200 µmol/m²/s, KI = 80, KiI = 500:
+  I_opt = sqrt(80 * 500) = 200 µmol/m²/s (this fixture is at optimal conditions)
+
+Assumptions:
+- Incident light intensity I is uniform throughout the reactor (well-mixed optically)
+- CO2 and nutrients are non-limiting (light is the sole limiting factor)
+- Temperature is maintained at optimum; no thermal inhibition
+- No dark respiration term (maintenance energy neglected)
+- Cell settling and adhesion to reactor walls are negligible
+- Biomass optical properties (extinction coefficient) are constant
+
+Limitations:
+- Light attenuation with depth (Beer-Lambert) is not explicitly modelled; the use of
+  incident intensity I is only accurate for thin or dilute cultures
+- Model does not capture diurnal light cycles (relevant for outdoor cultivation)
+- Only single-species growth is modelled; competition dynamics are excluded
+- Does not include nitrogen, phosphorus, or CO2 limitation
+- Temperature and pH effects on growth rate are not modelled
+- Haldane kinetics is an approximation; actual photoinhibition curves vary by species

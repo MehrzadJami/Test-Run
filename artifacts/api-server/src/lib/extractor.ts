@@ -19,14 +19,22 @@
 //   receive either a fully validated ExtractionResult or a typed error.
 //   Bad data is NEVER saved to the database.
 //
+// Audit trail (M17):
+//   runExtraction() now returns an `audit` object alongside `result` and
+//   `providerName`. The audit captures: the model ID used, the exact system
+//   prompt sent (NO secrets), a short prompt template summary, the raw
+//   provider response before repair/validation, repair status, validation
+//   errors (if any), and token usage metadata. Callers persist this to the
+//   database via the extractions.audit* columns.
+//
 // Token / cost metadata:
 //   Logged at info level when the provider supplies it. Never throws if
 //   metadata is absent.
 //
 // Database mapping:
 //   mapExtractionToDb() converts an ExtractionResult into the row shapes
-//   the routes layer inserts. Richer fields without DB columns are folded
-//   into adjacent text fields. The DB schema is never changed here.
+//   the routes layer inserts. All fields from the extraction schema are now
+//   stored in dedicated columns — rawExtractionJson remains the audit record.
 
 import {
   ExtractionResultSchema,
@@ -35,6 +43,7 @@ import {
 } from "./extraction-schema";
 import { OpenAIProvider } from "./providers/openai-provider";
 import { GeminiProvider } from "./providers/gemini-provider";
+import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./providers/prompt";
 import { logger } from "./logger";
 
 // ---------- Public errors ----------
@@ -72,11 +81,43 @@ export interface ExtractionProvider {
    * always re-validates against ExtractionResultSchema, so providers never
    * bypass validation.
    *
-   * Real providers return `{ raw: unknown; tokenMeta: object | null }`.
+   * Real providers return `{ raw, tokenMeta, providerModel, systemPrompt }`.
    * MockProvider returns an ExtractionResult directly (no token metadata).
    */
   extract(sourceText: string): Promise<unknown>;
 }
+
+// ---------- Audit data type ----------
+
+/**
+ * M17: Extraction audit record captured by runExtraction() and persisted
+ * alongside every extraction row.
+ *
+ * Safety guarantees:
+ * - systemPrompt contains only the instructional text sent to the AI provider.
+ *   API keys, secrets, and user credentials are NEVER stored here.
+ * - rawProviderResponse contains the AI output only — not the request payload.
+ * - tokenUsage contains counts and estimated cost only — no billing details.
+ */
+export type AuditData = {
+  /** Exact model identifier, e.g. "gpt-4o", "gemini-1.5-flash", "mock". */
+  providerModel: string;
+  /** System prompt sent to the provider. Safe — no secrets. Empty for mock. */
+  systemPrompt: string;
+  /** Short description of the extraction template purpose. */
+  promptTemplateSummary: string;
+  /** Raw provider response BEFORE JSON repair and Zod validation. Null for mock. */
+  rawProviderResponse: unknown;
+  /** Whether the response needed JSON repair before it could be validated. */
+  repairStatus: "not_needed" | "repaired" | "failed";
+  /** Zod validation error text if any. Null when extraction succeeded cleanly. */
+  validationErrors: string | null;
+  /** Token count / estimated cost metadata. Null when unavailable (mock always null). */
+  tokenUsage: Record<string, unknown> | null;
+};
+
+const PROMPT_TEMPLATE_SUMMARY =
+  "Extracts a quantitative chemical engineering model (state variables, ODEs, parameters, assumptions, model card) from scientific/engineering text into a structured JSON object matching ExtractionResultSchema.";
 
 // ---------- Mock provider ----------
 
@@ -270,6 +311,7 @@ export async function runExtraction(
 ): Promise<{
   result: ExtractionResult;
   providerName: ProviderName;
+  audit: AuditData;
 }> {
   const trimmed = sourceText.trim();
   if (trimmed.length === 0) {
@@ -294,10 +336,14 @@ export async function runExtraction(
     );
   }
 
-  // Real providers return { raw, tokenMeta }; MockProvider returns the result
-  // directly. Normalise to a single `candidate` value.
+  // Real providers return { raw, tokenMeta, providerModel, systemPrompt };
+  // MockProvider returns the ExtractionResult directly.
+  // Normalise to: candidate, tokenMeta, providerModel, capturedSystemPrompt.
   let candidate: unknown;
   let tokenMeta: Record<string, unknown> | null = null;
+  let providerModelId = "";
+  let capturedSystemPrompt = "";
+  let rawProviderResponse: unknown = null;
 
   if (
     providerOutput !== null &&
@@ -305,14 +351,26 @@ export async function runExtraction(
     "raw" in providerOutput &&
     "tokenMeta" in providerOutput
   ) {
-    const typed = providerOutput as { raw: unknown; tokenMeta: unknown };
+    const typed = providerOutput as {
+      raw: unknown;
+      tokenMeta: unknown;
+      providerModel?: string;
+      systemPrompt?: string;
+    };
     candidate = typed.raw;
+    rawProviderResponse = typed.raw;
     tokenMeta =
       typed.tokenMeta && typeof typed.tokenMeta === "object"
         ? (typed.tokenMeta as Record<string, unknown>)
         : null;
+    providerModelId = typed.providerModel ?? "";
+    capturedSystemPrompt = typed.systemPrompt ?? "";
   } else {
+    // Mock provider — returns ExtractionResult directly, no API call made.
     candidate = providerOutput;
+    rawProviderResponse = null;
+    providerModelId = "mock";
+    capturedSystemPrompt = "";
   }
 
   // Log token / cost metadata when present. Never throw if absent.
@@ -325,9 +383,12 @@ export async function runExtraction(
 
   // First validation attempt.
   let parsed = ExtractionResultSchema.safeParse(candidate);
+  let repairStatus: AuditData["repairStatus"] = "not_needed";
+  let validationErrors: string | null = null;
 
   // If validation failed, attempt one JSON repair pass.
   if (!parsed.success) {
+    const firstError = parsed.error.message;
     const repaired = tryRepairJson(candidate);
     if (repaired !== null && repaired !== candidate) {
       logger.warn(
@@ -335,6 +396,15 @@ export async function runExtraction(
         "First parse failed — attempting JSON repair pass",
       );
       parsed = ExtractionResultSchema.safeParse(repaired);
+      if (parsed.success) {
+        repairStatus = "repaired";
+      } else {
+        repairStatus = "failed";
+        validationErrors = `Before repair: ${firstError}\nAfter repair: ${parsed.error.message}`;
+      }
+    } else {
+      repairStatus = "failed";
+      validationErrors = firstError;
     }
   }
 
@@ -345,7 +415,17 @@ export async function runExtraction(
     );
   }
 
-  return { result: parsed.data, providerName: provider.name };
+  const audit: AuditData = {
+    providerModel: providerModelId,
+    systemPrompt: capturedSystemPrompt,
+    promptTemplateSummary: PROMPT_TEMPLATE_SUMMARY,
+    rawProviderResponse,
+    repairStatus,
+    validationErrors,
+    tokenUsage: tokenMeta,
+  };
+
+  return { result: parsed.data, providerName: provider.name, audit };
 }
 
 // ---------- DB mapping ----------
@@ -360,7 +440,12 @@ export type DbExtractionRow = {
 
 export type DbEquationRow = {
   ordinal: number;
+  label: string;
   latex: string;
+  plaintext: string;
+  meaning: string;
+  variablesInvolved: string[];
+  confidence: "high" | "medium" | "low";
   description: string;
   sourceQuote: string;
 };
@@ -369,14 +454,17 @@ export type DbVariableRow = {
   ordinal: number;
   symbol: string;
   name: string;
+  meaning: string;
   unit: string;
   role: "state" | "input" | "output";
+  confidence: "high" | "medium" | "low";
   sourceQuote: string;
 };
 
 export type DbParameterRow = {
   ordinal: number;
   symbol: string;
+  name: string;
   value: number;
   unit: string;
   confidence: "high" | "medium" | "low";
@@ -387,6 +475,8 @@ export type DbAssumptionRow = {
   ordinal: number;
   kind: "assumption" | "limitation";
   text: string;
+  sourceQuote: string;
+  confidence: "high" | "medium" | "low";
 };
 
 export type MappedExtraction = {
@@ -496,14 +586,6 @@ if __name__ == "__main__":
 `;
 }
 
-function formatVariableName(name: string, meaning: string): string {
-  const n = name.trim();
-  const m = meaning.trim();
-  if (!m || m === n) return n;
-  if (!n) return m;
-  return `${n} — ${m}`;
-}
-
 function formatEquationDescription(
   label: string,
   meaning: string,
@@ -527,7 +609,12 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
 
   const equations: DbEquationRow[] = r.equations.map((eq, i) => ({
     ordinal: i,
+    label: eq.label,
     latex: eq.equation_latex,
+    plaintext: eq.equation_plaintext,
+    meaning: eq.meaning,
+    variablesInvolved: eq.variables_involved,
+    confidence: eq.confidence,
     description: formatEquationDescription(
       eq.label,
       eq.meaning,
@@ -539,9 +626,11 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
   const variables: DbVariableRow[] = r.state_variables.map((v, i) => ({
     ordinal: i,
     symbol: v.symbol,
-    name: formatVariableName(v.name, v.meaning),
+    name: v.name,
+    meaning: v.meaning,
     unit: v.unit,
     role: downgradeRole(v.role),
+    confidence: v.confidence,
     sourceQuote: v.source_context,
   }));
 
@@ -550,11 +639,11 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
     return {
       ordinal: i,
       symbol: p.symbol,
+      name: p.name,
       value: num,
       unit: p.unit,
       confidence: ok ? p.confidence : "low",
       sourceQuote:
-        (p.name ? `${p.name}. ` : "") +
         (ok ? "" : `(value "${p.value}" could not be parsed numerically) `) +
         p.source_context,
     };
@@ -565,11 +654,15 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
       ordinal: i,
       kind: "assumption" as const,
       text: a.assumption,
+      sourceQuote: a.source_context,
+      confidence: a.confidence,
     })),
     ...r.limitations.map((l, i) => ({
       ordinal: i,
       kind: "limitation" as const,
       text: l.limitation,
+      sourceQuote: l.source_context,
+      confidence: l.confidence,
     })),
   ];
 

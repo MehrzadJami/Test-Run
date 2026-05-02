@@ -1,0 +1,62 @@
+Fed-Batch Bioreactor Model with Variable Volume
+
+This document describes a dynamic model for a fed-batch bioreactor, where substrate-rich
+medium is added continuously while no liquid is withdrawn. The reactor volume therefore
+increases over time, and dilution effects must be explicitly accounted for.
+
+System Description:
+A fed-batch bioreactor starts with an initial culture volume V0. Substrate feed is pumped
+in at volumetric flow rate F with substrate concentration Sin. Biomass X and substrate S
+concentrations are expressed per unit liquid volume. The culture grows according to
+Monod kinetics while volume increases.
+
+State Variables:
+- X: biomass concentration (g/L) — microorganism concentration in liquid volume
+- S: substrate concentration (g/L) — limiting substrate concentration in liquid volume
+- V: liquid volume (L) — total liquid volume in the reactor at time t
+
+Parameters:
+- mumax: maximum specific growth rate = 0.35 1/h
+- Ks: Monod half-saturation constant = 0.30 g/L
+- Yxs: biomass yield on substrate = 0.45 g-X/g-S
+- F: volumetric feed rate = 0.50 L/h (constant feed strategy shown here)
+- Sin: feed substrate concentration = 50.0 g/L (concentrated feed)
+- V0: initial liquid volume = 5.0 L
+
+Governing Equations:
+Specific growth rate (Monod):
+  mu = mumax * S / (Ks + S)
+
+Dilution rate (time-varying):
+  D(t) = F / V(t)
+
+Biomass balance (concentration):
+  dX/dt = (mu - D) * X
+
+Substrate balance (concentration):
+  dS/dt = D * (Sin - S) - (1 / Yxs) * mu * X
+
+Volume balance:
+  dV/dt = F
+
+The system starts from initial conditions X(0) = X0, S(0) = S0, V(0) = V0.
+As V increases, D decreases, allowing accumulation of biomass while substrate is replenished.
+
+Assumptions:
+- Feed medium is sterile (no organisms in feed stream)
+- Perfect mixing at all times despite increasing volume
+- Monod kinetics describe growth; other growth models not considered
+- Yield Yxs is constant across all growth rates
+- No evaporation; liquid volume increases only due to feed addition
+- No overflow; reactor vessel is large enough to hold final volume
+
+Limitations:
+- Constant feed rate F is a simplification; exponential or optimised feeding strategies
+  give better performance
+- Does not model oxygen or other nutrient co-limitations
+- Structured cell models (cell cycle, intracellular storage) are not included
+- Heat generation and cooling requirements are not modelled
+- Volume increase is bounded by reactor geometry; model assumes unlimited capacity
+- Viscosity changes due to biomass accumulation are neglected
+
+Operational target: maximise total biomass X * V at harvest time.

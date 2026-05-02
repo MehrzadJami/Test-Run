@@ -1,3 +1,4 @@
+export * from "./auth";
 export * from "./projects";
 export * from "./source-documents";
 export * from "./extractions";

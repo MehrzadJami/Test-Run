@@ -1,0 +1,74 @@
+Start M15: Automated Tests and CI.
+
+Important rules:
+Do not add new product features in this milestone.
+Do not rewrite the app.
+Focus only on test coverage and reliability.
+
+Goal:
+Add a practical automated test suite for the current ChemAI Model Compiler v1.
+
+Add tests for:
+
+1. Pure client-side logic:
+   - analyzeReproducibility
+   - runUnitCheck
+   - generatePythonOdeTemplate
+   - generateModelPackage
+   - simulation calculations if simulation logic is separated
+
+2. Extraction engine:
+   - MockProvider returns valid ExtractionResultSchema
+   - invalid provider output fails validation
+   - JSON repair handles minor formatting issues
+   - provider fallback works: selected provider unavailable → fallback to next available/mock
+
+3. API routes:
+   - GET /api/healthz
+   - GET /api/projects
+   - POST /api/projects
+   - POST /api/projects/:id/sources
+   - POST /api/projects/:id/extractions
+   - GET /api/projects/:id/model-card
+   - GET /api/projects/:id/export
+   - POST /api/pdf/parse with safe test fixture or mocked parser
+
+4. Basic E2E smoke workflow if practical:
+   - open app
+   - load demo model
+   - view model card
+   - download package button exists
+   - simulation page loads
+
+Use the simplest reliable testing stack:
+- Vitest for unit tests
+- Supertest or node:test for API tests if appropriate
+- Playwright only if it does not create too much setup complexity
+
+Add GitHub Actions CI:
+- install dependencies
+- typecheck
+- run tests
+- build frontend
+- build API
+
+Requirements:
+1. Add npm/pnpm scripts:
+   - test
+   - test:unit
+   - test:api
+   - test:e2e if implemented
+   - typecheck
+   - ci
+2. Update README and docs/LOCAL_SETUP.md with test commands.
+3. Keep tests fast and deterministic.
+4. Do not require real OpenAI/Gemini keys for tests.
+5. Do not require external paid services.
+6. Mock database or use a test database safely.
+
+After finishing:
+- List all tests added
+- Tell me exact commands to run them
+- Tell me whether GitHub Actions is configured
+- Tell me what is not yet tested
+- Confirm production build still passes

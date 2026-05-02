@@ -1,0 +1,57 @@
+Continuous Stirred-Tank Bioreactor: Monod Kinetics Model
+
+This document describes a mathematical model for a continuous stirred-tank bioreactor
+(chemostat) operating under steady-state and dynamic conditions. The model uses Monod
+kinetics to describe microbial growth on a single limiting substrate.
+
+System Description:
+A chemostat maintains constant volume by balancing feed inflow with effluent outflow.
+Fresh medium containing substrate at concentration Sin enters at volumetric flow rate F,
+giving dilution rate D = F/V. The bioreactor is well-mixed and operates isothermally.
+
+State Variables:
+- X: biomass concentration (g/L) — concentration of microorganisms in the reactor
+- S: substrate concentration (g/L) — concentration of limiting nutrient (e.g. glucose)
+
+Parameters:
+- mumax: maximum specific growth rate = 0.40 1/h
+- Ks: Monod half-saturation constant = 0.50 g/L
+- Yxs: biomass yield coefficient = 0.50 g-X/g-S (grams of biomass per gram of substrate)
+- D: dilution rate = 0.20 1/h (operator-controlled)
+- Sin: inlet substrate concentration = 10.0 g/L
+
+Governing Equations:
+Specific growth rate (Monod):
+  mu = mumax * S / (Ks + S)
+
+Biomass balance:
+  dX/dt = (mu - D) * X
+
+Substrate balance:
+  dS/dt = D * (Sin - S) - (1 / Yxs) * mu * X
+
+Steady-State Solution:
+At steady state (dX/dt = 0, dS/dt = 0):
+  S_ss = D * Ks / (mumax - D)
+  X_ss = Yxs * (Sin - S_ss)
+Washout occurs when D >= mumax.
+
+Assumptions:
+- Perfect mixing in the reactor (no spatial gradients)
+- Single limiting substrate; all other nutrients are in excess
+- Constant reactor volume and steady feed composition
+- Isothermal operation; growth rate depends only on substrate concentration
+- No product inhibition; no maintenance energy requirements
+- Cell death rate is negligible compared to growth rate
+
+Limitations:
+- Monod kinetics do not capture substrate inhibition at high concentrations
+- Yield coefficient Yxs is assumed constant; in reality it may vary with growth rate
+- Model does not include structured intracellular dynamics
+- Not valid near washout (D → mumax) without additional considerations
+- Single-substrate model only; does not account for co-limitation
+
+Typical parameter ranges (aerobic heterotrophic bacteria):
+  mumax: 0.2 – 1.5 1/h
+  Ks: 0.05 – 2.0 g/L
+  Yxs: 0.3 – 0.6 g-X/g-S

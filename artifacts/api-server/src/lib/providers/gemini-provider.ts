@@ -33,6 +33,8 @@ export class GeminiProvider implements ExtractionProvider {
   async extract(sourceText: string): Promise<{
     raw: unknown;
     tokenMeta: GeminiTokenMeta | null;
+    providerModel: string;
+    systemPrompt: string;
   }> {
     const client = getClient();
     const model = client.getGenerativeModel({
@@ -62,6 +64,13 @@ export class GeminiProvider implements ExtractionProvider {
       raw = content;
     }
 
-    return { raw, tokenMeta };
+    return {
+      raw,
+      tokenMeta,
+      // M17: expose model ID and system prompt for audit trail.
+      // systemPrompt contains only instructional text — NO API keys.
+      providerModel: this.modelName,
+      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+    };
   }
 }

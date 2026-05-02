@@ -1,0 +1,98 @@
+{
+  "runAt": "2026-05-02T18:04:21.635Z",
+  "provider": "mock",
+  "baseUrl": "http://localhost:80",
+  "results": [
+    {
+      "fixture": "batch_reactor_first_order",
+      "provider": "mock",
+      "schemaValid": true,
+      "variableScore": 0,
+      "parameterScore": 0.5,
+      "equationScore": 1,
+      "unitScore": 0,
+      "missingInfoScore": 1,
+      "overallScore": 0.48,
+      "notes": [
+        "Low variable match (0%): extracted [x, t]",
+        "Low unit match (0%)"
+      ]
+    },
+    {
+      "fixture": "chemostat_monod",
+      "provider": "mock",
+      "schemaValid": true,
+      "variableScore": 0.33,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 1,
+      "overallScore": 0.18,
+      "notes": [
+        "Low variable match (33%): extracted [x, t]",
+        "Low parameter match (0%): extracted [k]",
+        "Low equation coverage (0%)",
+        "Low unit match (0%)"
+      ]
+    },
+    {
+      "fixture": "fed_batch_growth",
+      "provider": "mock",
+      "schemaValid": true,
+      "variableScore": 0.25,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 1,
+      "overallScore": 0.16,
+      "notes": [
+        "Low variable match (25%): extracted [x, t]",
+        "Low parameter match (0%): extracted [k]",
+        "Low equation coverage (0%)",
+        "Low unit match (0%)"
+      ]
+    },
+    {
+      "fixture": "gas_liquid_transfer",
+      "provider": "mock",
+      "schemaValid": true,
+      "variableScore": 0.33,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 1,
+      "overallScore": 0.18,
+      "notes": [
+        "Low variable match (33%): extracted [x, t]",
+        "Low parameter match (0%): extracted [k]",
+        "Low equation coverage (0%)",
+        "Low unit match (0%)"
+      ]
+    },
+    {
+      "fixture": "photobioreactor_light",
+      "provider": "mock",
+      "schemaValid": true,
+      "variableScore": 0.5,
+      "parameterScore": 0,
+      "equationScore": 0,
+      "unitScore": 0,
+      "missingInfoScore": 1,
+      "overallScore": 0.23,
+      "notes": [
+        "Low parameter match (0%): extracted [k]",
+        "Low equation coverage (0%)",
+        "Low unit match (0%)"
+      ]
+    }
+  ],
+  "summary": {
+    "meanVariableScore": 0.28,
+    "meanParameterScore": 0.1,
+    "meanEquationScore": 0.2,
+    "meanUnitScore": 0,
+    "meanMissingInfoScore": 1,
+    "meanOverallScore": 0.25,
+    "schemaPassRate": 1
+  }
+}

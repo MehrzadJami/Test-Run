@@ -1,0 +1,22 @@
+{
+  "fixture_name": "Fed-Batch Growth Variable Volume",
+  "expected_variable_symbols": ["X", "S", "V"],
+  "expected_variable_units": {
+    "x": "g/L",
+    "s": "g/L",
+    "v": "L"
+  },
+  "expected_parameter_symbols": ["mumax", "Ks", "Yxs", "F", "Sin"],
+  "expected_parameter_units": {
+    "mumax": "1/h",
+    "ks": "g/L",
+    "yxs": "g-X/g-S",
+    "f": "L/h",
+    "sin": "g/L"
+  },
+  "expected_equation_symbol_sets": [
+    ["X", "mu", "D"],
+    ["S", "D", "Sin", "Yxs"],
+    ["V", "F"]
+  ]
+}

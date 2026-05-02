@@ -1,0 +1,15 @@
+{
+  "fixture_name": "Batch Reactor First-Order Kinetics",
+  "expected_variable_symbols": ["C"],
+  "expected_variable_units": {
+    "c": "mol/L"
+  },
+  "expected_parameter_symbols": ["k", "C0"],
+  "expected_parameter_units": {
+    "k": "1/h",
+    "c0": "mol/L"
+  },
+  "expected_equation_symbol_sets": [
+    ["C", "k"]
+  ]
+}

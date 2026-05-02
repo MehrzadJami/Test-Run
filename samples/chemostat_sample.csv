@@ -1,0 +1,23 @@
+# ChemAI Model Compiler — Sample experimental data for Monod chemostat fitting v1
+# True parameters used to generate this data (with ~4 % added noise):
+#   mumax = 0.50 h⁻¹,  Ks = 0.50 g/L,  Yxs = 0.50 g-X/g-S
+#   D = 0.30 h⁻¹,  Sin = 10.0 g/L
+#   X0 = 0.10 g/L,  S0 = 10.0 g/L
+# Fitting should recover mumax ≈ 0.50, Ks ≈ 0.50, Yxs ≈ 0.50
+time,X,S
+0.0,0.10,10.00
+2.0,0.15,9.91
+4.0,0.22,9.80
+6.0,0.34,9.65
+8.0,0.52,9.38
+10.0,0.79,8.92
+12.0,1.23,8.14
+14.0,1.88,6.97
+16.0,2.65,5.52
+18.0,3.32,3.94
+20.0,3.87,2.60
+22.0,4.24,1.72
+24.0,4.43,1.15
+26.0,4.51,0.92
+28.0,4.56,0.80
+30.0,4.59,0.76

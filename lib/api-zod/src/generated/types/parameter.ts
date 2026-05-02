@@ -6,13 +6,19 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ParameterConfidence } from "./parameterConfidence";
+import type { ParameterOriginalValue } from "./parameterOriginalValue";
 
 export interface Parameter {
   id: number;
   ordinal: number;
   symbol: string;
+  /** Full descriptive name of the parameter. */
+  name: string;
   value: number;
   unit: string;
   confidence: ParameterConfidence;
   sourceQuote: string;
+  editedByUser: boolean;
+  /** @nullable */
+  originalValue?: ParameterOriginalValue;
 }

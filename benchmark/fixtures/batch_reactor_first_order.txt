@@ -1,0 +1,55 @@
+Batch Reactor: First-Order Irreversible Reaction Kinetics
+
+This document describes a mathematical model for a batch reactor in which a single
+reactant undergoes first-order irreversible degradation. This model is applicable to
+chemical degradation, radioactive decay, and simple enzymatic reactions.
+
+System Description:
+A batch reactor has no inflow or outflow during operation. A reactant at initial
+concentration C0 degrades at a rate proportional to its current concentration C.
+The reaction is irreversible and temperature is held constant throughout the batch.
+
+State Variables:
+- C: reactant concentration (mol/L) — molar concentration of the species being degraded
+
+Parameters:
+- k: first-order rate constant = 0.12 1/h (degradation rate constant, temperature-dependent)
+- C0: initial reactant concentration = 1.0 mol/L (reactor loading at t = 0)
+
+Governing Equations:
+Rate law (first-order):
+  r = -k * C
+
+Mole balance for batch reactor:
+  dC/dt = -k * C
+
+Analytical solution (exponential decay):
+  C(t) = C0 * exp(-k * t)
+
+Half-life of the reactant:
+  t_half = ln(2) / k
+
+At k = 0.12 1/h, the half-life is approximately 5.78 hours.
+90% conversion is achieved at t = ln(10) / k ≈ 19.2 hours.
+
+Assumptions:
+- Perfect mixing within the batch reactor at all times
+- Isothermal operation (k is constant throughout the batch)
+- First-order kinetics hold over the entire concentration range
+- Reaction is irreversible; product back-reaction is negligible
+- Constant liquid volume (no evaporation or density change with conversion)
+- Single reactant and single reaction pathway
+
+Limitations:
+- Rate constant k is highly temperature-sensitive (Arrhenius); temperature deviations
+  will cause significant errors if not accounted for
+- First-order assumption breaks down at high concentrations for reactions that are
+  truly second-order or have Langmuir-type adsorption
+- Model does not include product inhibition
+- Not applicable to reversible reactions without modification
+- Pressure effects on liquid-phase reactions are ignored
+
+Typical first-order rate constants:
+  Pharmaceutical degradation: 0.001 – 0.1 1/h
+  Biological oxygen demand: 0.05 – 0.5 1/h
+  Radioactive decay: highly variable (half-life from seconds to millennia)

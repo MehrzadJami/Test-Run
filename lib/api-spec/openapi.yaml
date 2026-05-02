@@ -10,14 +10,20 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication operations
   - name: projects
     description: Research projects
   - name: sources
     description: Source documents within a project
   - name: extractions
     description: AI-extracted model artifacts (model card, equations, variables, parameters, assumptions, ODE template)
+  - name: editing
+    description: Human verification and inline editing of extracted model fields
   - name: export
     description: Export stored data
+  - name: share
+    description: Public model card sharing
 paths:
   /healthz:
     get:
@@ -33,11 +39,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
 
+  /auth/user:
+    get:
+      operationId: getCurrentAuthUser
+      tags: [auth]
+      summary: Get the current authenticated user
+      description: Returns the authenticated user from the session cookie, or null if not logged in.
+      responses:
+        "200":
+          description: Current auth state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetCurrentAuthUserResponse"
+
   /projects:
     get:
       operationId: listProjects
       tags: [projects]
-      summary: List all projects
+      summary: List projects visible to the current user
+      description: >-
+        If authenticated, returns the user's own projects plus all public projects.
+        If not authenticated, returns only public projects.
       responses:
         "200":
           description: List of projects with summary stats
@@ -102,6 +125,55 @@ paths:
       responses:
         "204":
           description: Deleted
+        "403":
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /projects/{projectId}/visibility:
+    patch:
+      operationId: updateProjectVisibility
+      tags: [projects]
+      summary: Update project visibility (owner only)
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectVisibilityInput"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Not authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "404":
           description: Not found
           content:
@@ -259,6 +331,290 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /share/model-cards/{extractionId}:
+    get:
+      operationId: getPublicModelCard
+      tags: [share]
+      summary: Get a publicly shared model card (no auth required)
+      description: >-
+        Returns the model card for public sharing. The project must have
+        visibility=public. Audit/provider fields (systemPrompt,
+        rawProviderResponse, promptTemplateSummary) are redacted in the response.
+      parameters:
+        - name: extractionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Public model card with audit fields redacted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCard"
+        "404":
+          description: Model card not found or not publicly shared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /variables/{id}:
+    patch:
+      operationId: patchVariable
+      tags: [editing]
+      summary: Update one or more fields of a variable (human verification)
+      description: |
+        Accepts a partial update. On first edit the original extracted value is
+        snapshotted into originalValue for audit purposes. rawExtractionJson is
+        never mutated. Returns the full updated variable row.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchVariableInput"
+      responses:
+        "200":
+          description: Updated variable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Variable"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Variable not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /variables/{id}/reset:
+    post:
+      operationId: resetVariable
+      tags: [editing]
+      summary: Reset a variable to its original extracted value
+      description: |
+        Restores all fields from the originalValue snapshot, clears editedByUser,
+        and nulls originalValue. No-op if the variable has not been edited.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reset variable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Variable"
+        "404":
+          description: Variable not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /parameters/{id}:
+    patch:
+      operationId: patchParameter
+      tags: [editing]
+      summary: Update one or more fields of a parameter (human verification)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchParameterInput"
+      responses:
+        "200":
+          description: Updated parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Parameter"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Parameter not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /parameters/{id}/reset:
+    post:
+      operationId: resetParameter
+      tags: [editing]
+      summary: Reset a parameter to its original extracted value
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reset parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Parameter"
+        "404":
+          description: Parameter not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /equations/{id}:
+    patch:
+      operationId: patchEquation
+      tags: [editing]
+      summary: Update one or more fields of an equation (human verification)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchEquationInput"
+      responses:
+        "200":
+          description: Updated equation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Equation"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Equation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /equations/{id}/reset:
+    post:
+      operationId: resetEquation
+      tags: [editing]
+      summary: Reset an equation to its original extracted value
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reset equation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Equation"
+        "404":
+          description: Equation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /assumptions/{id}:
+    patch:
+      operationId: patchAssumption
+      tags: [editing]
+      summary: Update one or more fields of an assumption or limitation (human verification)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchAssumptionInput"
+      responses:
+        "200":
+          description: Updated assumption/limitation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assumption"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Assumption not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /assumptions/{id}/reset:
+    post:
+      operationId: resetAssumption
+      tags: [editing]
+      summary: Reset an assumption/limitation to its original extracted value
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reset assumption/limitation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assumption"
+        "404":
+          description: Assumption not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
 components:
   schemas:
     ParsePdfInput:
@@ -303,6 +659,67 @@ components:
       required:
         - error
 
+    AuthUser:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: ["string", "null"]
+        firstName:
+          type: ["string", "null"]
+        lastName:
+          type: ["string", "null"]
+        profileImageUrl:
+          type: ["string", "null"]
+      required: [id]
+
+    GetCurrentAuthUserResponse:
+      type: object
+      properties:
+        user:
+          oneOf:
+            - $ref: "#/components/schemas/AuthUser"
+            - type: "null"
+      required: [user]
+
+    ExchangeMobileAuthorizationCodeBody:
+      type: object
+      properties:
+        code:
+          type: string
+        code_verifier:
+          type: string
+        redirect_uri:
+          type: string
+        state:
+          type: string
+        nonce:
+          type: ["string", "null"]
+      required: [code, code_verifier, redirect_uri, state]
+
+    ExchangeMobileAuthorizationCodeResponse:
+      type: object
+      properties:
+        token:
+          type: string
+      required: [token]
+
+    LogoutMobileSessionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required: [success]
+
+    UpdateProjectVisibilityInput:
+      type: object
+      properties:
+        visibility:
+          type: string
+          enum: [private, public]
+      required: [visibility]
+
     Project:
       type: object
       properties:
@@ -312,13 +729,20 @@ components:
           type: string
         description:
           type: string
+        ownerId:
+          type: ["string", "null"]
+          description: User ID of the project owner. Null for legacy/demo projects.
+        visibility:
+          type: string
+          enum: [private, public]
+          description: Who can view this project. Private projects are only accessible to their owner.
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
-      required: [id, name, description, createdAt, updatedAt]
+      required: [id, name, description, ownerId, visibility, createdAt, updatedAt]
 
     ProjectSummary:
       allOf:
@@ -414,13 +838,39 @@ components:
           type: integer
         ordinal:
           type: integer
+        label:
+          type: string
+          description: Short label, e.g. "(1)" or "Eq. 3".
         latex:
           type: string
+          description: LaTeX representation of the equation.
+        plaintext:
+          type: string
+          description: Plain-text (ASCII) representation.
+        meaning:
+          type: string
+          description: Human-readable explanation of what the equation represents.
+        variablesInvolved:
+          type: array
+          items:
+            type: string
+          description: Symbols appearing in this equation.
+        confidence:
+          type: string
+          enum: [high, medium, low]
         description:
           type: string
+          description: Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility.
         sourceQuote:
           type: string
-      required: [id, ordinal, latex, description, sourceQuote]
+        editedByUser:
+          type: boolean
+          description: True if any field has been manually edited after extraction.
+        originalValue:
+          type: ["object", "null"]
+          additionalProperties: true
+          description: Snapshot of the row before the first human edit. Null if unedited.
+      required: [id, ordinal, label, latex, plaintext, meaning, variablesInvolved, confidence, description, sourceQuote, editedByUser]
 
     Variable:
       type: object
@@ -433,14 +883,25 @@ components:
           type: string
         name:
           type: string
+        meaning:
+          type: string
+          description: Explanation of what the variable represents physically.
         unit:
           type: string
         role:
           type: string
           enum: [state, input, output]
+        confidence:
+          type: string
+          enum: [high, medium, low]
         sourceQuote:
           type: string
-      required: [id, ordinal, symbol, name, unit, role, sourceQuote]
+        editedByUser:
+          type: boolean
+        originalValue:
+          type: ["object", "null"]
+          additionalProperties: true
+      required: [id, ordinal, symbol, name, meaning, unit, role, confidence, sourceQuote, editedByUser]
 
     Parameter:
       type: object
@@ -451,6 +912,9 @@ components:
           type: integer
         symbol:
           type: string
+        name:
+          type: string
+          description: Full descriptive name of the parameter.
         value:
           type: number
         unit:
@@ -460,7 +924,12 @@ components:
           enum: [high, medium, low]
         sourceQuote:
           type: string
-      required: [id, ordinal, symbol, value, unit, confidence, sourceQuote]
+        editedByUser:
+          type: boolean
+        originalValue:
+          type: ["object", "null"]
+          additionalProperties: true
+      required: [id, ordinal, symbol, name, value, unit, confidence, sourceQuote, editedByUser]
 
     Assumption:
       type: object
@@ -474,7 +943,97 @@ components:
           enum: [assumption, limitation]
         text:
           type: string
-      required: [id, ordinal, kind, text]
+        sourceQuote:
+          type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        editedByUser:
+          type: boolean
+        originalValue:
+          type: ["object", "null"]
+          additionalProperties: true
+      required: [id, ordinal, kind, text, sourceQuote, confidence, editedByUser]
+
+    PatchVariableInput:
+      type: object
+      description: Partial update for a variable. Only provided fields are changed.
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        meaning:
+          type: string
+        unit:
+          type: string
+        role:
+          type: string
+          enum: [state, input, output]
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        sourceQuote:
+          type: string
+
+    PatchParameterInput:
+      type: object
+      description: Partial update for a parameter. Only provided fields are changed.
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        sourceQuote:
+          type: string
+
+    PatchEquationInput:
+      type: object
+      description: Partial update for an equation. Only provided fields are changed.
+      properties:
+        label:
+          type: string
+        latex:
+          type: string
+          minLength: 1
+        plaintext:
+          type: string
+        meaning:
+          type: string
+        variablesInvolved:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        sourceQuote:
+          type: string
+
+    PatchAssumptionInput:
+      type: object
+      description: Partial update for an assumption or limitation. Only provided fields are changed.
+      properties:
+        text:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum: [assumption, limitation]
+        sourceQuote:
+          type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
 
     ExtractionSummary:
       type: object
@@ -550,6 +1109,87 @@ components:
                 assumptions, limitations, model_card). Null for legacy rows
                 created before this column existed; clients should fall back
                 to the normalized tables in that case.
+            providerModel:
+              type: string
+              description: >-
+                Exact model identifier used by the provider
+                (e.g. "gpt-4o", "gemini-1.5-flash", "mock").
+                Empty string for legacy rows.
+            systemPrompt:
+              type: string
+              description: >-
+                System prompt sent verbatim to the AI provider.
+                Contains only instructional text — NO API keys or secrets.
+                Empty string for mock provider, legacy rows, and public share views.
+            promptTemplateSummary:
+              type: string
+              description: One-line description of the extraction prompt template purpose.
+            rawProviderResponse:
+              type: ["object", "null"]
+              additionalProperties: true
+              description: >-
+                Raw provider response BEFORE JSON repair and Zod validation.
+                Distinct from rawExtractionJson (post-validation canonical result).
+                Null for mock provider (no API call made), legacy rows, and public share views.
+            repairStatus:
+              type: string
+              enum: [not_needed, repaired, failed]
+              description: Whether the provider response required JSON repair before validation.
+            validationErrors:
+              type: ["string", "null"]
+              description: >-
+                Zod validation error details if the extraction failed or
+                required repair. Null when the extraction succeeded cleanly.
+            tokenUsage:
+              type: ["object", "null"]
+              additionalProperties: true
+              description: >-
+                Token count and estimated cost metadata from the provider.
+                Shape varies by provider (OpenAI vs Gemini). Null when
+                unavailable (mock provider always returns null).
+            modelType:
+              type: string
+              enum:
+                - chemostat
+                - batch_reactor
+                - fed_batch
+                - cstr
+                - gas_liquid_transfer
+                - microalgae_pbr
+                - generic_ode
+              description: >-
+                Auto-detected model type from the rule-based domain classifier.
+                "generic_ode" is the safe default for unknown models and
+                legacy rows.
+            modelTypeConfidence:
+              type: number
+              format: float
+              description: >-
+                Classifier confidence score in [0, 1].
+                Computed as score / (score + 10) from keyword evidence.
+                0 means no domain keywords were found.
+            modelTypeMatchedKeywords:
+              type: array
+              items:
+                type: string
+              description: >-
+                Keywords and phrases from the source text / extracted fields
+                that contributed to the auto-classification score.
+            modelTypeOverride:
+              type: ["string", "null"]
+              enum:
+                - chemostat
+                - batch_reactor
+                - fed_batch
+                - cstr
+                - gas_liquid_transfer
+                - microalgae_pbr
+                - generic_ode
+                - null
+              description: >-
+                User-supplied model type override. When non-null, takes
+                precedence over modelType in all frontend displays. Null means
+                "use the classifier result".
             createdAt:
               type: string
               format: date-time
@@ -568,6 +1208,17 @@ components:
             - problemStatement
             - odeTemplate
             - rawExtractionJson
+            - providerModel
+            - systemPrompt
+            - promptTemplateSummary
+            - rawProviderResponse
+            - repairStatus
+            - validationErrors
+            - tokenUsage
+            - modelType
+            - modelTypeConfidence
+            - modelTypeMatchedKeywords
+            - modelTypeOverride
             - createdAt
             - updatedAt
         equations:

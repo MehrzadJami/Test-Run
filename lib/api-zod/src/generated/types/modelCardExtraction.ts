@@ -5,9 +5,14 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+import type { ModelCardExtractionModelType } from "./modelCardExtractionModelType";
+import type { ModelCardExtractionModelTypeOverride } from "./modelCardExtractionModelTypeOverride";
 import type { ModelCardExtractionProviderUsed } from "./modelCardExtractionProviderUsed";
 import type { ModelCardExtractionRawExtractionJson } from "./modelCardExtractionRawExtractionJson";
+import type { ModelCardExtractionRawProviderResponse } from "./modelCardExtractionRawProviderResponse";
+import type { ModelCardExtractionRepairStatus } from "./modelCardExtractionRepairStatus";
 import type { ModelCardExtractionStatus } from "./modelCardExtractionStatus";
+import type { ModelCardExtractionTokenUsage } from "./modelCardExtractionTokenUsage";
 
 export type ModelCardExtraction = {
   id: number;
@@ -26,6 +31,40 @@ export type ModelCardExtraction = {
    * @nullable
    */
   rawExtractionJson: ModelCardExtractionRawExtractionJson;
+  /** Exact model identifier used by the provider (e.g. "gpt-4o", "gemini-1.5-flash", "mock"). Empty string for legacy rows. */
+  providerModel: string;
+  /** System prompt sent verbatim to the AI provider. Contains only instructional text — NO API keys or secrets. Empty string for mock provider, legacy rows, and public share views. */
+  systemPrompt: string;
+  /** One-line description of the extraction prompt template purpose. */
+  promptTemplateSummary: string;
+  /**
+   * Raw provider response BEFORE JSON repair and Zod validation. Distinct from rawExtractionJson (post-validation canonical result). Null for mock provider (no API call made), legacy rows, and public share views.
+   * @nullable
+   */
+  rawProviderResponse: ModelCardExtractionRawProviderResponse;
+  /** Whether the provider response required JSON repair before validation. */
+  repairStatus: ModelCardExtractionRepairStatus;
+  /**
+   * Zod validation error details if the extraction failed or required repair. Null when the extraction succeeded cleanly.
+   * @nullable
+   */
+  validationErrors: string | null;
+  /**
+   * Token count and estimated cost metadata from the provider. Shape varies by provider (OpenAI vs Gemini). Null when unavailable (mock provider always returns null).
+   * @nullable
+   */
+  tokenUsage: ModelCardExtractionTokenUsage;
+  /** Auto-detected model type from the rule-based domain classifier. "generic_ode" is the safe default for unknown models and legacy rows. */
+  modelType: ModelCardExtractionModelType;
+  /** Classifier confidence score in [0, 1]. Computed as score / (score + 10) from keyword evidence. 0 means no domain keywords were found. */
+  modelTypeConfidence: number;
+  /** Keywords and phrases from the source text / extracted fields that contributed to the auto-classification score. */
+  modelTypeMatchedKeywords: string[];
+  /**
+   * User-supplied model type override. When non-null, takes precedence over modelType in all frontend displays. Null means "use the classifier result".
+   * @nullable
+   */
+  modelTypeOverride: ModelCardExtractionModelTypeOverride;
   createdAt: Date;
   updatedAt: Date;
 };

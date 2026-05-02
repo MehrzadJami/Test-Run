@@ -5,11 +5,19 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+import type { ProjectVisibility } from "./projectVisibility";
 
 export interface Project {
   id: number;
   name: string;
   description: string;
+  /**
+   * User ID of the project owner. Null for legacy/demo projects.
+   * @nullable
+   */
+  ownerId: string | null;
+  /** Who can view this project. Private projects are only accessible to their owner. */
+  visibility: ProjectVisibility;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   jsonb,
+  real,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -32,9 +33,55 @@ export const extractionsTable = pgTable("extractions", {
   problemStatement: text("problem_statement").notNull().default(""),
   odeTemplate: text("ode_template").notNull().default(""),
   // Full validated provider output (canonical ExtractionResultSchema shape).
-  // Nullable for backwards compatibility with rows created before this column
-  // existed; the frontend gracefully falls back to normalized tables.
   rawExtractionJson: jsonb("raw_extraction_json"),
+  // ── M17: Prompt Transparency & Extraction Audit Trail ──────────────────────
+  providerModel: text("provider_model").notNull().default(""),
+  systemPrompt: text("system_prompt").notNull().default(""),
+  promptTemplateSummary: text("prompt_template_summary").notNull().default(""),
+  rawProviderResponse: jsonb("raw_provider_response"),
+  repairStatus: text("repair_status", {
+    enum: ["not_needed", "repaired", "failed"],
+  })
+    .notNull()
+    .default("not_needed"),
+  validationErrors: text("validation_errors"),
+  tokenUsage: jsonb("token_usage"),
+  // ── M19: Domain Templates and Model Type Classifier ─────────────────────────
+  // Auto-detected model type from the rule-based domain classifier.
+  // "generic_ode" is the safe default for legacy rows and unknown models.
+  modelType: text("model_type", {
+    enum: [
+      "chemostat",
+      "batch_reactor",
+      "fed_batch",
+      "cstr",
+      "gas_liquid_transfer",
+      "microalgae_pbr",
+      "generic_ode",
+    ],
+  })
+    .notNull()
+    .default("generic_ode"),
+  // Normalised classifier confidence in [0, 1]. 0 = no keyword evidence.
+  modelTypeConfidence: real("model_type_confidence").notNull().default(0),
+  // Keywords from the source text that triggered the classification.
+  modelTypeMatchedKeywords: jsonb("model_type_matched_keywords")
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  // User-supplied override. When set, takes precedence over modelType.
+  // Null means "use the classifier result".
+  modelTypeOverride: text("model_type_override", {
+    enum: [
+      "chemostat",
+      "batch_reactor",
+      "fed_batch",
+      "cstr",
+      "gas_liquid_transfer",
+      "microalgae_pbr",
+      "generic_ode",
+    ],
+  }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

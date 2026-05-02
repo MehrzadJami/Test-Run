@@ -19,17 +19,27 @@ import type {
 import type {
   AddSourceDocumentInput,
   ApiError,
+  Assumption,
   CreateExtractionInput,
   CreateProjectInput,
+  Equation,
+  GetCurrentAuthUserResponse,
   HealthStatus,
   ModelCard,
+  Parameter,
   ParsePdfInput,
   ParsePdfResult,
+  PatchAssumptionInput,
+  PatchEquationInput,
+  PatchParameterInput,
+  PatchVariableInput,
   Project,
   ProjectDetail,
   ProjectExport,
   ProjectSummary,
   SourceDocument,
+  UpdateProjectVisibilityInput,
+  Variable,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -118,7 +128,84 @@ export function useHealthCheck<
 }
 
 /**
- * @summary List all projects
+ * Returns the authenticated user from the session cookie, or null if not logged in.
+ * @summary Get the current authenticated user
+ */
+export const getGetCurrentAuthUserUrl = () => {
+  return `/api/auth/user`;
+};
+
+export const getCurrentAuthUser = async (
+  options?: RequestInit,
+): Promise<GetCurrentAuthUserResponse> => {
+  return customFetch<GetCurrentAuthUserResponse>(getGetCurrentAuthUserUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetCurrentAuthUserQueryKey = () => {
+  return [`/api/auth/user`] as const;
+};
+
+export const getGetCurrentAuthUserQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCurrentAuthUser>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getCurrentAuthUser>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetCurrentAuthUserQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCurrentAuthUser>>
+  > = ({ signal }) => getCurrentAuthUser({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCurrentAuthUser>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetCurrentAuthUserQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCurrentAuthUser>>
+>;
+export type GetCurrentAuthUserQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the current authenticated user
+ */
+
+export function useGetCurrentAuthUser<
+  TData = Awaited<ReturnType<typeof getCurrentAuthUser>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getCurrentAuthUser>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetCurrentAuthUserQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * If authenticated, returns the user's own projects plus all public projects. If not authenticated, returns only public projects.
+ * @summary List projects visible to the current user
  */
 export const getListProjectsUrl = () => {
   return `/api/projects`;
@@ -169,7 +256,7 @@ export type ListProjectsQueryResult = NonNullable<
 export type ListProjectsQueryError = ErrorType<unknown>;
 
 /**
- * @summary List all projects
+ * @summary List projects visible to the current user
  */
 
 export function useListProjects<
@@ -447,6 +534,94 @@ export const useDeleteProject = <
   TContext
 > => {
   return useMutation(getDeleteProjectMutationOptions(options));
+};
+
+/**
+ * @summary Update project visibility (owner only)
+ */
+export const getUpdateProjectVisibilityUrl = (projectId: number) => {
+  return `/api/projects/${projectId}/visibility`;
+};
+
+export const updateProjectVisibility = async (
+  projectId: number,
+  updateProjectVisibilityInput: UpdateProjectVisibilityInput,
+  options?: RequestInit,
+): Promise<Project> => {
+  return customFetch<Project>(getUpdateProjectVisibilityUrl(projectId), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateProjectVisibilityInput),
+  });
+};
+
+export const getUpdateProjectVisibilityMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateProjectVisibility>>,
+    TError,
+    { projectId: number; data: BodyType<UpdateProjectVisibilityInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateProjectVisibility>>,
+  TError,
+  { projectId: number; data: BodyType<UpdateProjectVisibilityInput> },
+  TContext
+> => {
+  const mutationKey = ["updateProjectVisibility"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateProjectVisibility>>,
+    { projectId: number; data: BodyType<UpdateProjectVisibilityInput> }
+  > = (props) => {
+    const { projectId, data } = props ?? {};
+
+    return updateProjectVisibility(projectId, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateProjectVisibilityMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateProjectVisibility>>
+>;
+export type UpdateProjectVisibilityMutationBody =
+  BodyType<UpdateProjectVisibilityInput>;
+export type UpdateProjectVisibilityMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update project visibility (owner only)
+ */
+export const useUpdateProjectVisibility = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateProjectVisibility>>,
+    TError,
+    { projectId: number; data: BodyType<UpdateProjectVisibilityInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateProjectVisibility>>,
+  TError,
+  { projectId: number; data: BodyType<UpdateProjectVisibilityInput> },
+  TContext
+> => {
+  return useMutation(getUpdateProjectVisibilityMutationOptions(options));
 };
 
 /**
@@ -892,3 +1067,784 @@ export function useExportProject<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Returns the model card for public sharing. The project must have visibility=public. Audit/provider fields (systemPrompt, rawProviderResponse, promptTemplateSummary) are redacted in the response.
+ * @summary Get a publicly shared model card (no auth required)
+ */
+export const getGetPublicModelCardUrl = (extractionId: number) => {
+  return `/api/share/model-cards/${extractionId}`;
+};
+
+export const getPublicModelCard = async (
+  extractionId: number,
+  options?: RequestInit,
+): Promise<ModelCard> => {
+  return customFetch<ModelCard>(getGetPublicModelCardUrl(extractionId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPublicModelCardQueryKey = (extractionId: number) => {
+  return [`/api/share/model-cards/${extractionId}`] as const;
+};
+
+export const getGetPublicModelCardQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPublicModelCard>>,
+  TError = ErrorType<ApiError>,
+>(
+  extractionId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPublicModelCard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPublicModelCardQueryKey(extractionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPublicModelCard>>
+  > = ({ signal }) =>
+    getPublicModelCard(extractionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!extractionId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPublicModelCard>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPublicModelCardQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPublicModelCard>>
+>;
+export type GetPublicModelCardQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get a publicly shared model card (no auth required)
+ */
+
+export function useGetPublicModelCard<
+  TData = Awaited<ReturnType<typeof getPublicModelCard>>,
+  TError = ErrorType<ApiError>,
+>(
+  extractionId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPublicModelCard>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPublicModelCardQueryOptions(extractionId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Accepts a partial update. On first edit the original extracted value is
+snapshotted into originalValue for audit purposes. rawExtractionJson is
+never mutated. Returns the full updated variable row.
+
+ * @summary Update one or more fields of a variable (human verification)
+ */
+export const getPatchVariableUrl = (id: number) => {
+  return `/api/variables/${id}`;
+};
+
+export const patchVariable = async (
+  id: number,
+  patchVariableInput: PatchVariableInput,
+  options?: RequestInit,
+): Promise<Variable> => {
+  return customFetch<Variable>(getPatchVariableUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(patchVariableInput),
+  });
+};
+
+export const getPatchVariableMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchVariable>>,
+    TError,
+    { id: number; data: BodyType<PatchVariableInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof patchVariable>>,
+  TError,
+  { id: number; data: BodyType<PatchVariableInput> },
+  TContext
+> => {
+  const mutationKey = ["patchVariable"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof patchVariable>>,
+    { id: number; data: BodyType<PatchVariableInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return patchVariable(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PatchVariableMutationResult = NonNullable<
+  Awaited<ReturnType<typeof patchVariable>>
+>;
+export type PatchVariableMutationBody = BodyType<PatchVariableInput>;
+export type PatchVariableMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update one or more fields of a variable (human verification)
+ */
+export const usePatchVariable = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchVariable>>,
+    TError,
+    { id: number; data: BodyType<PatchVariableInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof patchVariable>>,
+  TError,
+  { id: number; data: BodyType<PatchVariableInput> },
+  TContext
+> => {
+  return useMutation(getPatchVariableMutationOptions(options));
+};
+
+/**
+ * Restores all fields from the originalValue snapshot, clears editedByUser,
+and nulls originalValue. No-op if the variable has not been edited.
+
+ * @summary Reset a variable to its original extracted value
+ */
+export const getResetVariableUrl = (id: number) => {
+  return `/api/variables/${id}/reset`;
+};
+
+export const resetVariable = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Variable> => {
+  return customFetch<Variable>(getResetVariableUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResetVariableMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetVariable>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resetVariable>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["resetVariable"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resetVariable>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resetVariable(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResetVariableMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resetVariable>>
+>;
+
+export type ResetVariableMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Reset a variable to its original extracted value
+ */
+export const useResetVariable = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetVariable>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resetVariable>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getResetVariableMutationOptions(options));
+};
+
+/**
+ * @summary Update one or more fields of a parameter (human verification)
+ */
+export const getPatchParameterUrl = (id: number) => {
+  return `/api/parameters/${id}`;
+};
+
+export const patchParameter = async (
+  id: number,
+  patchParameterInput: PatchParameterInput,
+  options?: RequestInit,
+): Promise<Parameter> => {
+  return customFetch<Parameter>(getPatchParameterUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(patchParameterInput),
+  });
+};
+
+export const getPatchParameterMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchParameter>>,
+    TError,
+    { id: number; data: BodyType<PatchParameterInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof patchParameter>>,
+  TError,
+  { id: number; data: BodyType<PatchParameterInput> },
+  TContext
+> => {
+  const mutationKey = ["patchParameter"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof patchParameter>>,
+    { id: number; data: BodyType<PatchParameterInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return patchParameter(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PatchParameterMutationResult = NonNullable<
+  Awaited<ReturnType<typeof patchParameter>>
+>;
+export type PatchParameterMutationBody = BodyType<PatchParameterInput>;
+export type PatchParameterMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update one or more fields of a parameter (human verification)
+ */
+export const usePatchParameter = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchParameter>>,
+    TError,
+    { id: number; data: BodyType<PatchParameterInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof patchParameter>>,
+  TError,
+  { id: number; data: BodyType<PatchParameterInput> },
+  TContext
+> => {
+  return useMutation(getPatchParameterMutationOptions(options));
+};
+
+/**
+ * @summary Reset a parameter to its original extracted value
+ */
+export const getResetParameterUrl = (id: number) => {
+  return `/api/parameters/${id}/reset`;
+};
+
+export const resetParameter = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Parameter> => {
+  return customFetch<Parameter>(getResetParameterUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResetParameterMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetParameter>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resetParameter>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["resetParameter"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resetParameter>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resetParameter(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResetParameterMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resetParameter>>
+>;
+
+export type ResetParameterMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Reset a parameter to its original extracted value
+ */
+export const useResetParameter = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetParameter>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resetParameter>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getResetParameterMutationOptions(options));
+};
+
+/**
+ * @summary Update one or more fields of an equation (human verification)
+ */
+export const getPatchEquationUrl = (id: number) => {
+  return `/api/equations/${id}`;
+};
+
+export const patchEquation = async (
+  id: number,
+  patchEquationInput: PatchEquationInput,
+  options?: RequestInit,
+): Promise<Equation> => {
+  return customFetch<Equation>(getPatchEquationUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(patchEquationInput),
+  });
+};
+
+export const getPatchEquationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchEquation>>,
+    TError,
+    { id: number; data: BodyType<PatchEquationInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof patchEquation>>,
+  TError,
+  { id: number; data: BodyType<PatchEquationInput> },
+  TContext
+> => {
+  const mutationKey = ["patchEquation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof patchEquation>>,
+    { id: number; data: BodyType<PatchEquationInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return patchEquation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PatchEquationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof patchEquation>>
+>;
+export type PatchEquationMutationBody = BodyType<PatchEquationInput>;
+export type PatchEquationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update one or more fields of an equation (human verification)
+ */
+export const usePatchEquation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchEquation>>,
+    TError,
+    { id: number; data: BodyType<PatchEquationInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof patchEquation>>,
+  TError,
+  { id: number; data: BodyType<PatchEquationInput> },
+  TContext
+> => {
+  return useMutation(getPatchEquationMutationOptions(options));
+};
+
+/**
+ * @summary Reset an equation to its original extracted value
+ */
+export const getResetEquationUrl = (id: number) => {
+  return `/api/equations/${id}/reset`;
+};
+
+export const resetEquation = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Equation> => {
+  return customFetch<Equation>(getResetEquationUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResetEquationMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetEquation>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resetEquation>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["resetEquation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resetEquation>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resetEquation(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResetEquationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resetEquation>>
+>;
+
+export type ResetEquationMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Reset an equation to its original extracted value
+ */
+export const useResetEquation = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetEquation>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resetEquation>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getResetEquationMutationOptions(options));
+};
+
+/**
+ * @summary Update one or more fields of an assumption or limitation (human verification)
+ */
+export const getPatchAssumptionUrl = (id: number) => {
+  return `/api/assumptions/${id}`;
+};
+
+export const patchAssumption = async (
+  id: number,
+  patchAssumptionInput: PatchAssumptionInput,
+  options?: RequestInit,
+): Promise<Assumption> => {
+  return customFetch<Assumption>(getPatchAssumptionUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(patchAssumptionInput),
+  });
+};
+
+export const getPatchAssumptionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchAssumption>>,
+    TError,
+    { id: number; data: BodyType<PatchAssumptionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof patchAssumption>>,
+  TError,
+  { id: number; data: BodyType<PatchAssumptionInput> },
+  TContext
+> => {
+  const mutationKey = ["patchAssumption"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof patchAssumption>>,
+    { id: number; data: BodyType<PatchAssumptionInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return patchAssumption(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PatchAssumptionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof patchAssumption>>
+>;
+export type PatchAssumptionMutationBody = BodyType<PatchAssumptionInput>;
+export type PatchAssumptionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Update one or more fields of an assumption or limitation (human verification)
+ */
+export const usePatchAssumption = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof patchAssumption>>,
+    TError,
+    { id: number; data: BodyType<PatchAssumptionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof patchAssumption>>,
+  TError,
+  { id: number; data: BodyType<PatchAssumptionInput> },
+  TContext
+> => {
+  return useMutation(getPatchAssumptionMutationOptions(options));
+};
+
+/**
+ * @summary Reset an assumption/limitation to its original extracted value
+ */
+export const getResetAssumptionUrl = (id: number) => {
+  return `/api/assumptions/${id}/reset`;
+};
+
+export const resetAssumption = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Assumption> => {
+  return customFetch<Assumption>(getResetAssumptionUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResetAssumptionMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetAssumption>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resetAssumption>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["resetAssumption"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resetAssumption>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resetAssumption(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResetAssumptionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resetAssumption>>
+>;
+
+export type ResetAssumptionMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Reset an assumption/limitation to its original extracted value
+ */
+export const useResetAssumption = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetAssumption>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resetAssumption>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getResetAssumptionMutationOptions(options));
+};

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, asc, sql } from "drizzle-orm";
+import { eq, desc, asc, sql, or, isNull } from "drizzle-orm";
 import {
   db,
   projectsTable,
@@ -20,6 +20,8 @@ import {
   CreateExtractionBody,
   GetModelCardByProjectParams,
   ExportProjectParams,
+  UpdateProjectVisibilityParams,
+  UpdateProjectVisibilityBody,
 } from "@workspace/api-zod";
 import {
   runExtraction,
@@ -27,8 +29,29 @@ import {
   ExtractionInputError,
   ExtractionProviderError,
 } from "../lib/extractor";
+import { classifyModel } from "@workspace/domain-classifier";
 
 const router: IRouter = Router();
+
+// ---------- access helpers ----------
+
+/** Returns true if the requesting user can VIEW the project. */
+function canView(
+  project: { ownerId: string | null; visibility: string },
+  userId: string | undefined,
+): boolean {
+  if (project.visibility === "public" || project.ownerId === null) return true;
+  return project.ownerId === userId;
+}
+
+/** Returns true if the requesting user can MUTATE the project. */
+function canMutate(
+  project: { ownerId: string | null },
+  userId: string | undefined,
+): boolean {
+  if (project.ownerId === null) return true; // legacy projects are world-editable
+  return !!userId && project.ownerId === userId;
+}
 
 // ---------- helpers ----------
 
@@ -67,10 +90,23 @@ async function loadModelCard(extractionId: number) {
 
 // ---------- projects ----------
 
-router.get("/projects", async (_req, res): Promise<void> => {
+router.get("/projects", async (req, res): Promise<void> => {
+  const userId = req.user?.id;
+  const visibilityFilter = userId
+    ? or(
+        eq(projectsTable.visibility, "public"),
+        isNull(projectsTable.ownerId),
+        eq(projectsTable.ownerId, userId),
+      )
+    : or(
+        eq(projectsTable.visibility, "public"),
+        isNull(projectsTable.ownerId),
+      );
+
   const projects = await db
     .select()
     .from(projectsTable)
+    .where(visibilityFilter)
     .orderBy(desc(projectsTable.updatedAt));
 
   if (projects.length === 0) {
@@ -78,7 +114,6 @@ router.get("/projects", async (_req, res): Promise<void> => {
     return;
   }
 
-  // For each project, compute counts and the latest extraction title.
   const summaries = await Promise.all(
     projects.map(async (p) => {
       const [{ count: sourceCount } = { count: 0 }] = await db
@@ -116,11 +151,14 @@ router.post("/projects", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+  const userId = req.user?.id ?? null;
   const [project] = await db
     .insert(projectsTable)
     .values({
       name: parsed.data.name,
       description: parsed.data.description ?? "",
+      ownerId: userId,
+      visibility: userId ? "private" : "public",
     })
     .returning();
   res.status(201).json(project);
@@ -140,6 +178,10 @@ router.get("/projects/:projectId", async (req, res): Promise<void> => {
 
   if (!project) {
     res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  if (!canView(project, req.user?.id)) {
+    res.status(403).json({ error: "Access denied" });
     return;
   }
 
@@ -174,16 +216,55 @@ router.delete("/projects/:projectId", async (req, res): Promise<void> => {
     res.status(400).json({ error: params.error.message });
     return;
   }
-  const [deleted] = await db
-    .delete(projectsTable)
-    .where(eq(projectsTable.id, params.data.projectId))
-    .returning();
-  if (!deleted) {
+  const [project] = await db
+    .select({ id: projectsTable.id, ownerId: projectsTable.ownerId })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, params.data.projectId));
+  if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
+  if (!canMutate(project, req.user?.id)) {
+    res.status(403).json({ error: "Access denied" });
+    return;
+  }
+  await db.delete(projectsTable).where(eq(projectsTable.id, project.id));
   res.sendStatus(204);
 });
+
+router.patch(
+  "/projects/:projectId/visibility",
+  async (req, res): Promise<void> => {
+    const params = UpdateProjectVisibilityParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    const body = UpdateProjectVisibilityBody.safeParse(req.body);
+    if (!body.success) {
+      res.status(400).json({ error: body.error.message });
+      return;
+    }
+    const [project] = await db
+      .select()
+      .from(projectsTable)
+      .where(eq(projectsTable.id, params.data.projectId));
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    if (!canMutate(project, req.user?.id)) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
+    const [updated] = await db
+      .update(projectsTable)
+      .set({ visibility: body.data.visibility, updatedAt: new Date() })
+      .where(eq(projectsTable.id, project.id))
+      .returning();
+    res.json(updated);
+  },
+);
 
 // ---------- source documents ----------
 
@@ -202,11 +283,15 @@ router.post(
     }
 
     const [project] = await db
-      .select({ id: projectsTable.id })
+      .select()
       .from(projectsTable)
       .where(eq(projectsTable.id, params.data.projectId));
     if (!project) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    if (!canMutate(project, req.user?.id)) {
+      res.status(403).json({ error: "Access denied" });
       return;
     }
 
@@ -240,11 +325,15 @@ router.post(
     }
 
     const [project] = await db
-      .select({ id: projectsTable.id })
+      .select()
       .from(projectsTable)
       .where(eq(projectsTable.id, params.data.projectId));
     if (!project) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    if (!canMutate(project, req.user?.id)) {
+      res.status(403).json({ error: "Access denied" });
       return;
     }
 
@@ -305,7 +394,28 @@ router.post(
     // 2. Map the validated result onto the existing DB row shapes.
     const mapped = mapExtractionToDb(extracted.result);
 
-    // 3. Persist atomically. Surface DB failure as a clean 500.
+    // M19: Run the rule-based domain classifier against the source content and
+    // extracted fields. This is a fast (~1 ms) pure in-process operation with
+    // no external calls. Never throws; defaults to "generic_ode" on failure.
+    const classification = classifyModel({
+      sourceText: source.content,
+      title: extracted.result.paper_title_or_topic,
+      domain: extracted.result.system_type,
+      variableNames: extracted.result.state_variables.map((v) => v.name),
+      variableSymbols: extracted.result.state_variables.map((v) => v.symbol),
+      parameterNames: extracted.result.parameters.map((p) => p.name),
+      parameterSymbols: extracted.result.parameters.map((p) => p.symbol),
+    });
+    req.log.info(
+      {
+        modelType: classification.modelType,
+        confidence: classification.confidence,
+        matchedKeywords: classification.matchedKeywords,
+      },
+      "Domain classifier result",
+    );
+
+    // 3. Persist atomically.
     let newExtractionId: number;
     try {
       newExtractionId = await db.transaction(async (tx) => {
@@ -317,10 +427,21 @@ router.post(
             providerUsed: extracted.providerName,
             status: "ready",
             ...mapped.extraction,
-            // Preserve the full validated provider output for the frontend
-            // and JSON export. Normalized tables remain the source of truth
-            // for relational queries.
             rawExtractionJson: extracted.result,
+            providerModel: extracted.audit.providerModel,
+            systemPrompt: extracted.audit.systemPrompt,
+            promptTemplateSummary: extracted.audit.promptTemplateSummary,
+            rawProviderResponse:
+              extracted.audit.rawProviderResponse as Record<
+                string,
+                unknown
+              > | null,
+            repairStatus: extracted.audit.repairStatus,
+            validationErrors: extracted.audit.validationErrors,
+            tokenUsage: extracted.audit.tokenUsage,
+            modelType: classification.modelType,
+            modelTypeConfidence: classification.confidence,
+            modelTypeMatchedKeywords: classification.matchedKeywords,
           })
           .returning();
         if (!extraction) throw new Error("Insert returned no extraction row");
@@ -385,6 +506,18 @@ router.get(
       res.status(400).json({ error: params.error.message });
       return;
     }
+    const [project] = await db
+      .select()
+      .from(projectsTable)
+      .where(eq(projectsTable.id, params.data.projectId));
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    if (!canView(project, req.user?.id)) {
+      res.status(403).json({ error: "Access denied" });
+      return;
+    }
     const [latest] = await db
       .select({ id: extractionsTable.id })
       .from(extractionsTable)
@@ -420,6 +553,10 @@ router.get(
       .where(eq(projectsTable.id, params.data.projectId));
     if (!project) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    if (!canView(project, req.user?.id)) {
+      res.status(403).json({ error: "Access denied" });
       return;
     }
 

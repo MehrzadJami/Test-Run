@@ -12,21 +12,33 @@ import NewExtraction from "@/pages/new-extraction";
 import ModelCardsIndex from "@/pages/model-cards";
 import ModelCardDetail from "@/pages/model-card-detail";
 import Simulation from "@/pages/simulation";
+import ExperimentalData from "@/pages/experimental-data";
 import Exports from "@/pages/exports";
+import ShareModelCard from "@/pages/share-model-card";
 
 const queryClient = new QueryClient();
 
-function Router() {
+function AppRouter() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
-      <Route path="/dashboard" component={Dashboard} />
-      <Route path="/new" component={NewExtraction} />
-      <Route path="/model-cards" component={ModelCardsIndex} />
-      <Route path="/model-cards/:id" component={ModelCardDetail} />
-      <Route path="/simulation" component={Simulation} />
-      <Route path="/exports" component={Exports} />
-      <Route component={NotFound} />
+      {/* Public share route — no sidebar */}
+      <Route path="/share/model-cards/:id" component={ShareModelCard} />
+      {/* All other routes get the full sidebar layout */}
+      <Route>
+        <Layout>
+          <Switch>
+            <Route path="/" component={Home} />
+            <Route path="/dashboard" component={Dashboard} />
+            <Route path="/new" component={NewExtraction} />
+            <Route path="/model-cards" component={ModelCardsIndex} />
+            <Route path="/model-cards/:id" component={ModelCardDetail} />
+            <Route path="/simulation" component={Simulation} />
+            <Route path="/experimental-data" component={ExperimentalData} />
+            <Route path="/exports" component={Exports} />
+            <Route component={NotFound} />
+          </Switch>
+        </Layout>
+      </Route>
     </Switch>
   );
 }
@@ -37,9 +49,7 @@ function App() {
       <ThemeProvider defaultTheme="light" storageKey="chemai-theme">
         <TooltipProvider>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <Layout>
-              <Router />
-            </Layout>
+            <AppRouter />
           </WouterRouter>
           <Toaster />
         </TooltipProvider>

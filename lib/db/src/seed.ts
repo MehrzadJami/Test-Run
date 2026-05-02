@@ -7,7 +7,7 @@
  * dotenv/config is imported so .env is loaded automatically if present.
  */
 import "dotenv/config";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, or } from "drizzle-orm";
 import {
   db,
   pool,
@@ -262,6 +262,8 @@ async function main(): Promise<void> {
 
   if (existing.length > 0) {
     const projectId = existing[0]!.id;
+
+    // Backfill rawExtractionJson if missing (pre-M2 rows)
     const backfilled = await db
       .update(extractionsTable)
       .set({ rawExtractionJson: CHEMOSTAT_RAW_EXTRACTION })
@@ -277,6 +279,118 @@ async function main(): Promise<void> {
       console.log(
         `  backfilled raw_extraction_json on ${backfilled.length} extraction(s)`,
       );
+    }
+
+    // Backfill new M16 columns on variables (meaning, confidence) if they are empty defaults
+    const extractionRow = await db
+      .select({ id: extractionsTable.id })
+      .from(extractionsTable)
+      .where(eq(extractionsTable.projectId, projectId))
+      .orderBy(extractionsTable.id)
+      .limit(1);
+
+    if (extractionRow.length > 0) {
+      const eId = extractionRow[0]!.id;
+
+      // Variables: backfill meaning + confidence
+      const svs = CHEMOSTAT_RAW_EXTRACTION.state_variables;
+      for (let i = 0; i < svs.length; i++) {
+        const sv = svs[i]!;
+        await db
+          .update(variablesTable)
+          .set({ meaning: sv.meaning, confidence: sv.confidence as "high" | "medium" | "low" })
+          .where(
+            and(
+              eq(variablesTable.extractionId, eId),
+              eq(variablesTable.ordinal, i),
+              or(
+                eq(variablesTable.meaning, ""),
+              ),
+            ),
+          );
+      }
+
+      // Parameters: backfill name
+      const ps = CHEMOSTAT_RAW_EXTRACTION.parameters;
+      for (let i = 0; i < ps.length; i++) {
+        const p = ps[i]!;
+        await db
+          .update(parametersTable)
+          .set({ name: p.name })
+          .where(
+            and(
+              eq(parametersTable.extractionId, eId),
+              eq(parametersTable.ordinal, i),
+              eq(parametersTable.name, ""),
+            ),
+          );
+      }
+
+      // Equations: backfill label, plaintext, meaning, variablesInvolved, confidence
+      const eqs = CHEMOSTAT_RAW_EXTRACTION.equations;
+      for (let i = 0; i < eqs.length; i++) {
+        const eq_ = eqs[i]!;
+        await db
+          .update(equationsTable)
+          .set({
+            label: eq_.label,
+            plaintext: eq_.equation_plaintext,
+            meaning: eq_.meaning,
+            variablesInvolved: eq_.variables_involved,
+            confidence: eq_.confidence as "high" | "medium" | "low",
+          })
+          .where(
+            and(
+              eq(equationsTable.extractionId, eId),
+              eq(equationsTable.ordinal, i),
+              or(
+                eq(equationsTable.label, ""),
+              ),
+            ),
+          );
+      }
+
+      // Assumptions: backfill sourceQuote + confidence
+      const assums = CHEMOSTAT_RAW_EXTRACTION.assumptions;
+      for (let i = 0; i < assums.length; i++) {
+        const a = assums[i]!;
+        await db
+          .update(assumptionsTable)
+          .set({
+            sourceQuote: a.source_context,
+            confidence: a.confidence as "high" | "medium" | "low",
+          })
+          .where(
+            and(
+              eq(assumptionsTable.extractionId, eId),
+              eq(assumptionsTable.ordinal, i),
+              eq(assumptionsTable.kind, "assumption"),
+              eq(assumptionsTable.sourceQuote, ""),
+            ),
+          );
+      }
+
+      // Limitations: backfill sourceQuote + confidence
+      const lims = CHEMOSTAT_RAW_EXTRACTION.limitations;
+      for (let i = 0; i < lims.length; i++) {
+        const l = lims[i]!;
+        await db
+          .update(assumptionsTable)
+          .set({
+            sourceQuote: l.source_context,
+            confidence: l.confidence as "high" | "medium" | "low",
+          })
+          .where(
+            and(
+              eq(assumptionsTable.extractionId, eId),
+              eq(assumptionsTable.ordinal, i),
+              eq(assumptionsTable.kind, "limitation"),
+              eq(assumptionsTable.sourceQuote, ""),
+            ),
+          );
+      }
+
+      console.log("  backfilled M16 fields on existing extraction rows");
     } else {
       console.log("  demo project already present — nothing to do");
     }
@@ -292,6 +406,8 @@ async function main(): Promise<void> {
         name: SEED_PROJECT_NAME,
         description:
           "Continuous-culture chemostat with substrate-limited microalgae growth (Monod kinetics). Seeded by ChemAI on first boot for demo purposes.",
+        ownerId: null,
+        visibility: "public",
       })
       .returning();
     if (!project) throw new Error("Failed to insert project");
@@ -331,26 +447,40 @@ async function main(): Promise<void> {
       {
         extractionId: extraction.id,
         ordinal: 0,
+        label: "(1)",
         latex: "\\frac{dX}{dt} = \\mu(S) X - D X",
-        description: "Biomass balance with growth and washout terms.",
+        plaintext: "dX/dt = mu(S)*X - D*X",
+        meaning: "Biomass balance with growth and washout terms.",
+        variablesInvolved: ["X", "S", "D"],
+        confidence: "high",
+        description: "[(1)] Biomass balance with growth and washout terms. (dX/dt = mu(S)*X - D*X)",
         sourceQuote:
           "Net biomass accumulation equals growth minus removal at the dilution rate D.",
       },
       {
         extractionId: extraction.id,
         ordinal: 1,
+        label: "(2)",
         latex:
           "\\frac{dS}{dt} = D (S_{in} - S) - \\frac{1}{Y} \\mu(S) X",
-        description:
-          "Substrate balance with feed, washout, and consumption (yield Y).",
+        plaintext: "dS/dt = D*(S_in - S) - (1/Y)*mu(S)*X",
+        meaning: "Substrate balance with feed, washout, and consumption (yield Y).",
+        variablesInvolved: ["S", "X", "D", "S_in", "Y"],
+        confidence: "high",
+        description: "[(2)] Substrate balance with feed, washout, and consumption (yield Y). (dS/dt = D*(S_in - S) - (1/Y)*mu(S)*X)",
         sourceQuote:
           "Substrate is supplied by the feed, removed with the outflow, and consumed by growth at yield Y.",
       },
       {
         extractionId: extraction.id,
         ordinal: 2,
+        label: "(3)",
         latex: "\\mu(S) = \\frac{\\mu_{max} S}{K_S + S}",
-        description: "Monod specific growth rate as a function of substrate.",
+        plaintext: "mu(S) = mu_max * S / (K_S + S)",
+        meaning: "Monod specific growth rate as a function of substrate.",
+        variablesInvolved: ["S", "mu_max", "K_S"],
+        confidence: "high",
+        description: "[(3)] Monod specific growth rate as a function of substrate. (mu(S) = mu_max * S / (K_S + S))",
         sourceQuote:
           "Specific growth rate follows the Monod expression with maximum mu_max and half-saturation constant K_S.",
       },
@@ -362,8 +492,10 @@ async function main(): Promise<void> {
         ordinal: 0,
         symbol: "X",
         name: "Biomass concentration",
+        meaning: "Algal biomass concentration in the reactor.",
         unit: "mg/L",
         role: "state",
+        confidence: "high",
         sourceQuote: "X is the algal biomass concentration in the reactor.",
       },
       {
@@ -371,8 +503,10 @@ async function main(): Promise<void> {
         ordinal: 1,
         symbol: "S",
         name: "Limiting substrate concentration",
+        meaning: "Residual concentration of the limiting nutrient.",
         unit: "mg/L",
         role: "state",
+        confidence: "high",
         sourceQuote:
           "S is the residual concentration of the limiting nutrient.",
       },
@@ -381,8 +515,10 @@ async function main(): Promise<void> {
         ordinal: 2,
         symbol: "t",
         name: "Time",
+        meaning: "Independent variable for the transient simulation.",
         unit: "day",
         role: "input",
+        confidence: "high",
         sourceQuote: "Independent variable for the transient simulation.",
       },
     ]);
@@ -392,6 +528,7 @@ async function main(): Promise<void> {
         extractionId: extraction.id,
         ordinal: 0,
         symbol: "mu_max",
+        name: "Maximum specific growth rate",
         value: 1.1,
         unit: "1/day",
         confidence: "high",
@@ -402,6 +539,7 @@ async function main(): Promise<void> {
         extractionId: extraction.id,
         ordinal: 1,
         symbol: "K_S",
+        name: "Half-saturation constant",
         value: 12.0,
         unit: "mg/L",
         confidence: "medium",
@@ -411,6 +549,7 @@ async function main(): Promise<void> {
         extractionId: extraction.id,
         ordinal: 2,
         symbol: "Y",
+        name: "Yield coefficient",
         value: 0.45,
         unit: "g/g",
         confidence: "high",
@@ -421,6 +560,7 @@ async function main(): Promise<void> {
         extractionId: extraction.id,
         ordinal: 3,
         symbol: "S_in",
+        name: "Feed substrate concentration",
         value: 150.0,
         unit: "mg/L",
         confidence: "high",
@@ -430,6 +570,7 @@ async function main(): Promise<void> {
         extractionId: extraction.id,
         ordinal: 4,
         symbol: "D",
+        name: "Dilution rate",
         value: 0.6,
         unit: "1/day",
         confidence: "high",
@@ -444,36 +585,48 @@ async function main(): Promise<void> {
         ordinal: 0,
         kind: "assumption",
         text: "Perfectly mixed reactor (no spatial gradients).",
+        sourceQuote: "The reactor is well mixed.",
+        confidence: "high",
       },
       {
         extractionId: extraction.id,
         ordinal: 1,
         kind: "assumption",
         text: "Constant working volume V and isothermal at 25 C.",
+        sourceQuote: "Constant-volume operation at fixed temperature.",
+        confidence: "high",
       },
       {
         extractionId: extraction.id,
         ordinal: 2,
         kind: "assumption",
         text: "Light limitation absorbed into mu_max — no explicit photon-balance term.",
+        sourceQuote: "The light-limitation term is folded into mu_max.",
+        confidence: "medium",
       },
       {
         extractionId: extraction.id,
         ordinal: 3,
         kind: "assumption",
         text: "Single limiting substrate S; other nutrients in excess.",
+        sourceQuote: "Substrate-limited growth following Monod.",
+        confidence: "high",
       },
       {
         extractionId: extraction.id,
         ordinal: 0,
         kind: "limitation",
         text: "Photon flux is held constant — model breaks down for diurnal or shaded operation.",
+        sourceQuote: "Operated at a fixed photon flux.",
+        confidence: "medium",
       },
       {
         extractionId: extraction.id,
         ordinal: 1,
         kind: "limitation",
         text: "Yield Y assumed constant; in reality varies with growth rate and stress conditions.",
+        sourceQuote: "Yield reported as a single number at 25 C.",
+        confidence: "medium",
       },
     ]);
 

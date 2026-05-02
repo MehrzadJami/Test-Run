@@ -285,14 +285,61 @@ Commit the generated files. Do not edit them manually.
 pnpm run typecheck
 
 # Typecheck only the API server
-pnpm --filter @workspace/api-server exec tsc --noEmit
+pnpm --filter @workspace/api-server run typecheck
 
 # Typecheck only the frontend
-pnpm --filter @workspace/chem-ai exec tsc --noEmit
+pnpm --filter @workspace/chem-ai run typecheck
 ```
 
-Pre-existing type errors in `@workspace/api-client-react` barrel exports are
-known and do not affect the build.
+---
+
+## Automated tests
+
+Tests use **Vitest** (unit + API integration). API tests hit the real database,
+so `DATABASE_URL` must be set and the schema must be applied first.
+
+```bash
+# All tests (unit + API integration) — api-server
+pnpm --filter @workspace/api-server run test
+
+# Unit tests only (api-server extraction engine + mapping)
+pnpm --filter @workspace/api-server run test:unit
+
+# API route integration tests only
+pnpm --filter @workspace/api-server run test:api
+
+# All tests — chem-ai pure-logic libs
+pnpm --filter @workspace/chem-ai run test
+
+# Watch mode (re-runs on file save)
+pnpm --filter @workspace/api-server run test:watch
+pnpm --filter @workspace/chem-ai run test:watch
+```
+
+### What is tested
+
+| Package | Test file | Coverage |
+|---|---|---|
+| `@workspace/api-server` | `src/lib/__tests__/extractor.test.ts` | MockProvider output, getActiveProvider fallback chain, JSON repair (fenced + prose-wrapped), mapExtractionToDb (roles, numeric parsing, ODE template) |
+| `@workspace/api-server` | `src/routes/__tests__/api.test.ts` | GET /api/healthz, GET /api/projects, POST /api/projects, POST /api/projects/:id/sources, POST /api/projects/:id/extractions, GET /api/projects/:id/model-card, GET /api/projects/:id/export, GET /api/export, POST /api/pdf/parse |
+| `@workspace/chem-ai` | `src/lib/__tests__/reproducibility.test.ts` | Return shape, empty inputs → score 0, well-populated inputs → higher score, missing_item severity, edge cases (null values, determinism) |
+| `@workspace/chem-ai` | `src/lib/__tests__/unit-checker.test.ts` | Return shape, clean inputs → pass, missing units → warnings, mixed time scales, undefined symbols in equations, determinism |
+| `@workspace/chem-ai` | `src/lib/__tests__/python-generator.test.ts` | scipy/numpy imports present, title embedded, parameters with values, TODO for null values, score embedding, determinism |
+| `@workspace/chem-ai` | `src/lib/__tests__/package-generator.test.ts` | Exactly 14 files, all filenames correct, README/CSV/JSON content, simulate.py matches pythonCode, requirements.txt has numpy/scipy/matplotlib, CSV quoting, null raw → _note field, determinism |
+
+### CI (GitHub Actions)
+
+The `.github/workflows/ci.yml` workflow runs automatically on every push and
+pull request to `main`. It:
+
+1. Starts a PostgreSQL 16 service container
+2. Installs dependencies (`pnpm install --frozen-lockfile`)
+3. Applies the schema (`drizzle-kit push`)
+4. Typechecks libs, api-server, and chem-ai
+5. Runs chem-ai unit tests
+6. Runs api-server unit + API integration tests
+7. Builds the frontend (`vite build`)
+8. Builds the API server (`esbuild`)
 
 ---
 

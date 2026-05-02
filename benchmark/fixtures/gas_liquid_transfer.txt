@@ -1,0 +1,50 @@
+Oxygen Transfer Model for Aerobic Bioreactors
+
+This document describes a dynamic model for dissolved oxygen (DO) concentration in
+an aerobic stirred-tank bioreactor. Oxygen supply from the gas phase and consumption
+by the microbial culture are both accounted for.
+
+System Description:
+Oxygen is sparged into the bioreactor and dissolves at the gas-liquid interface. The
+volumetric oxygen transfer coefficient kLa characterises the rate of oxygen dissolution.
+Microorganisms consume dissolved oxygen at a rate proportional to biomass concentration X.
+
+State Variables:
+- C: dissolved oxygen concentration (g/L) — DO level in the liquid phase
+- X: biomass concentration (g/L) — microbial cell concentration
+
+Parameters:
+- kLa: volumetric oxygen transfer coefficient = 100 1/h (depends on agitation, aeration)
+- Cstar: dissolved oxygen saturation concentration = 0.008 g/L (at 30 °C, 1 atm air)
+- qO2: specific oxygen uptake rate = 0.05 g-O2/g-X/h (oxygen demand per unit biomass)
+- D: dilution rate = 0.10 1/h
+
+Governing Equations:
+Oxygen transfer driving force (Henry's law):
+  OTR = kLa * (Cstar - C)
+
+Oxygen uptake rate:
+  OUR = qO2 * X
+
+Dissolved oxygen balance:
+  dC/dt = kLa * (Cstar - C) - qO2 * X - D * C
+
+At steady state:
+  C_ss = (kLa * Cstar - qO2 * X) / (kLa + D)
+
+Critical dilution rate for oxygen limitation occurs when C approaches zero.
+
+Assumptions:
+- Perfect gas-liquid mixing; kLa is spatially uniform
+- Henry's law applies; Cstar depends on temperature and partial pressure of O2
+- Oxygen uptake rate is proportional to biomass (no substrate limitation modelled here)
+- Isothermal operation
+- Gas phase oxygen fraction is approximately constant (dilute transfer assumption)
+- No oxygen storage in cells
+
+Limitations:
+- kLa is assumed constant; in practice it depends on agitation speed, airflow, and viscosity
+- Does not model gas holdup or bubble size distribution
+- qO2 is assumed constant; it varies with growth rate and substrate availability
+- Model is valid only when C > 0 (aerobic regime); anaerobic transition not captured
+- Temperature effects on Cstar are not included explicitly

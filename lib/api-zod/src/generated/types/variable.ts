@@ -5,6 +5,8 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+import type { VariableConfidence } from "./variableConfidence";
+import type { VariableOriginalValue } from "./variableOriginalValue";
 import type { VariableRole } from "./variableRole";
 
 export interface Variable {
@@ -12,7 +14,13 @@ export interface Variable {
   ordinal: number;
   symbol: string;
   name: string;
+  /** Explanation of what the variable represents physically. */
+  meaning: string;
   unit: string;
   role: VariableRole;
+  confidence: VariableConfidence;
   sourceQuote: string;
+  editedByUser: boolean;
+  /** @nullable */
+  originalValue?: VariableOriginalValue;
 }

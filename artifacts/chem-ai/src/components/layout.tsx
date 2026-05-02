@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { ConnectionStatus } from "./connection-status";
 import { useTheme } from "./ThemeProvider";
+import { useAuth } from "@workspace/replit-auth-web";
 import { 
   LayoutDashboard, 
   Library, 
@@ -10,7 +11,11 @@ import {
   Moon, 
   Sun,
   Menu,
-  X
+  X,
+  FlaskConical,
+  LogIn,
+  LogOut,
+  User,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { useState } from "react";
@@ -19,6 +24,7 @@ export function Sidebar() {
   const [location] = useLocation();
   const { theme, setTheme } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
+  const { user, isLoading, isAuthenticated, login, logout } = useAuth();
 
   const toggleTheme = () => {
     setTheme(theme === "dark" ? "light" : "dark");
@@ -29,8 +35,25 @@ export function Sidebar() {
     { href: "/new", label: "New Extraction", icon: PlusCircle },
     { href: "/model-cards", label: "Model Cards", icon: Library },
     { href: "/simulation", label: "Simulation", icon: ActivitySquare },
+    { href: "/experimental-data", label: "Exp. Data Fitting", icon: FlaskConical },
     { href: "/exports", label: "Exports", icon: DownloadCloud },
   ];
+
+  const displayName =
+    user?.firstName
+      ? user.lastName
+        ? `${user.firstName} ${user.lastName}`
+        : user.firstName
+      : user?.email ?? "Account";
+
+  const initials =
+    user?.firstName && user?.lastName
+      ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase()
+      : user?.firstName
+      ? user.firstName[0].toUpperCase()
+      : user?.email
+      ? user.email[0].toUpperCase()
+      : "U";
 
   return (
     <>
@@ -92,7 +115,7 @@ export function Sidebar() {
           })}
         </div>
 
-        <div className="p-4 border-t border-border flex items-center justify-between">
+        <div className="p-4 border-t border-border flex flex-col gap-2">
           <Button 
             variant="ghost" 
             size="sm" 
@@ -107,6 +130,48 @@ export function Sidebar() {
             )}
             <span className="text-sm">Toggle Theme</span>
           </Button>
+
+          {/* Auth section */}
+          {!isLoading && (
+            isAuthenticated && user ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center justify-center w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-semibold shrink-0">
+                  {initials}
+                </div>
+                <span className="flex-1 text-xs text-sidebar-foreground truncate" title={displayName}>
+                  {displayName}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                  onClick={logout}
+                  title="Sign out"
+                  data-testid="btn-logout"
+                >
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start text-sidebar-foreground"
+                onClick={login}
+                data-testid="btn-login"
+              >
+                <LogIn className="w-4 h-4 mr-2" />
+                <span className="text-sm">Sign In</span>
+              </Button>
+            )
+          )}
+
+          {isLoading && (
+            <div className="flex items-center gap-2 px-3 py-1.5">
+              <User className="w-4 h-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Loading…</span>
+            </div>
+          )}
         </div>
 
         <ConnectionStatus />
