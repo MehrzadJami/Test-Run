@@ -307,6 +307,59 @@ All requests go through the shared proxy at `localhost:80`. Do not call service 
 
 ---
 
+## Deploying on Replit
+
+ChemAI Model Compiler is a two-service pnpm monorepo. Replit's publishing tool handles both services automatically once secrets are configured.
+
+### Required secrets (Replit → Secrets tab)
+
+| Secret | Where to get it | Required? |
+|---|---|---|
+| `DATABASE_URL` | Added automatically by the Replit PostgreSQL integration | **Yes** |
+| `SESSION_SECRET` | `openssl rand -hex 32` | Reserved — needed when auth (M15) is added |
+| `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) | No — app runs in mock mode without it |
+| `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) | No — app runs in mock mode without it |
+
+`PORT`, `BASE_PATH`, and `NODE_ENV` are injected automatically per-service — do not set them as secrets.
+
+### Database setup (first deployment only)
+
+The schema must be applied to the production database before the first deployment:
+
+```bash
+# From the Replit Shell (uses the DATABASE_URL secret automatically)
+pnpm --filter @workspace/db run push
+```
+
+After that, the server seeds demo data automatically on every startup (idempotent — safe to run repeatedly).
+
+### Run commands
+
+Replit injects these automatically via each artifact's `artifact.toml` — no manual configuration needed.
+
+| Service | Production command |
+|---|---|
+| API server | `node --enable-source-maps artifacts/api-server/dist/index.mjs` |
+| Frontend | Served as static files from `artifacts/chem-ai/dist/public` |
+
+### Verify the deployment
+
+After publishing, check these endpoints on your `.replit.app` domain:
+
+```
+GET /api/healthz        → {"status":"ok"}
+GET /api/projects       → [{"id":1,"name":"Chemostat — microalgae bioreactor (Andrews 1968)",...}]
+GET /                   → React app loads, demo model visible in dashboard
+```
+
+### Mock mode (no AI keys needed)
+
+All extraction features work in mock mode — a deterministic mock provider returns a pre-built chemostat model card with realistic equations, parameters, and a reproducibility score. The full 10-tab model card, RK4 simulator, and ZIP export all function without any API key.
+
+To enable real AI extraction, add `OPENAI_API_KEY` or `GEMINI_API_KEY` to Replit Secrets (requires M13 milestone implementation).
+
+---
+
 ## Contributing
 
 This project is under active development. If you find a bug or want to propose a feature, open an issue or submit a pull request.

@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "ChemAI Model Extractor"
+title = "ChemAI Model Compiler"
 version = "1.0.0"
 id = "chem-ai"
 router = "path"
