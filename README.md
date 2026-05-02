@@ -76,7 +76,11 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 ## 5. Features
 
 **Extraction engine**
-- Provider-agnostic interface: `MockProvider` (deterministic, always available), `OpenAI`, `Gemini` (future)
+- Provider-agnostic interface: `MockProvider` (deterministic), `OpenAIProvider` (GPT-4o), `GeminiProvider` (Gemini 1.5 Flash)
+- Provider priority chain: user-selected → OpenAI → Gemini → Mock (auto fallback)
+- Provider selector on the New Extraction page; per-extraction `providerUsed` stored in the database
+- JSON repair pass before Zod validation — tolerates minor model formatting drift
+- Token and cost logging per extraction (provider, model, input/output tokens)
 - Full `ExtractionResultSchema` Zod validation on every provider response — no silent failures
 - Atomic DB transaction: equations, variables, parameters, assumptions all committed together or not at all
 - Raw provider JSON preserved in `raw_extraction_json` column for traceability
@@ -97,11 +101,19 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Python ODE template (`simulate.py`): parameters pre-filled, equation bodies marked TODO, readiness banners included
 - Simulation CSV: time-series (t, X, S) from the browser RK4 solver
 
+**PDF ingestion**
+- Upload a PDF directly on the New Extraction page — no copy-paste needed
+- Server-side text extraction via `pdf-parse` (Node.js, no browser globals required)
+- `POST /api/pdf/parse` accepts base64-encoded PDF; returns plain text + page/word/char counts
+- Limits: 20 MB file size, 200 pages, minimum 30 extractable characters (rejects image-only PDFs)
+- Parsed text preview shown before confirming extraction; fallback to paste-text tab on failure
+
 **Developer experience**
 - OpenAPI-first contract: `lib/api-spec` → codegen → React Query hooks + Zod schemas
 - Drizzle ORM with typed schema across all tables
 - Pino structured logging (JSON) on the API server
 - pnpm monorepo with `@workspace/*` shared libraries
+- 11 transitive dependency vulnerabilities patched via `pnpm-workspace.yaml` overrides (picomatch, path-to-regexp, lodash, brace-expansion, yaml, postcss)
 
 ---
 
@@ -118,7 +130,8 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 | Export | JSZip (client-side) |
 | Package manager | pnpm workspaces |
 | Shared libs | `@workspace/db`, `@workspace/api-spec`, `@workspace/api-zod`, `@workspace/api-client-react` |
-| Extraction providers | MockProvider (built-in); OpenAI / Gemini (planned) |
+| Extraction providers | MockProvider (built-in), OpenAI GPT-4o, Gemini 1.5 Flash |
+| PDF parsing | pdf-parse v1 (server-side, Node.js-safe) |
 
 ---
 
@@ -186,8 +199,8 @@ See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for detailed Replit setup, port c
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `SESSION_SECRET` | Yes (prod) | — | Secret for session signing |
 | `PORT` | No | `8080` (API) | Assigned automatically by Replit |
-| `OPENAI_API_KEY` | No | — | Enables OpenAI provider (future milestone) |
-| `GEMINI_API_KEY` | No | — | Enables Gemini provider (future milestone) |
+| `OPENAI_API_KEY` | No | — | Enables OpenAI GPT-4o provider; falls back to Gemini or Mock without it |
+| `GEMINI_API_KEY` | No | — | Enables Gemini 1.5 Flash provider; falls back to Mock without it |
 | `NODE_ENV` | No | `development` | Set to `production` for deployed builds |
 
 With no AI API key set, the system falls back to `MockProvider` automatically.
@@ -261,8 +274,8 @@ All requests go through the shared proxy at `localhost:80`. Do not call service 
 
 ## 12. Limitations
 
-- **MockProvider only (current).** All extractions return deterministic seed data regardless of input. Real AI providers (OpenAI, Gemini) are not yet wired.
-- **No PDF parsing.** PDF content must be copy-pasted as plain text. Raw binary PDF upload is not supported.
+- **Real AI providers active.** OpenAI GPT-4o and Gemini 1.5 Flash are live when API keys are set; the system falls back to MockProvider automatically without them.
+- **PDF ingestion active, text-based PDFs only.** Image-only and scanned PDFs are rejected with a clear error; use the paste-text tab for those.
 - **Single-source projects.** Each extraction uses the most recent source document. Multi-source aggregation is not implemented.
 - **Reproducibility score is heuristic.** The scoring algorithm is rule-based, not validated against a reference dataset.
 - **Unit check is dimensional only.** It identifies plausible mismatches; it does not perform rigorous dimensional analysis.
@@ -288,8 +301,8 @@ All requests go through the shared proxy at `localhost:80`. Do not call service 
 | M10 — UI polish | ✓ Done | Demo workflow, empty states, exports page |
 | M11 — Documentation | ✓ Done | README, ARCHITECTURE, API, LOCAL_SETUP, ROADMAP, SCHEMA |
 | M12 — Portability & dev handoff | ✓ Done | Replit monorepo migration, env config, name standardization |
-| M13 — Real AI providers | Planned | OpenAI GPT-4o + Gemini 1.5 Pro structured output |
-| M14 — PDF ingestion | Planned | Server-side PDF text extraction |
+| M13 — Real AI providers | ✓ Done | OpenAI GPT-4o + Gemini 1.5 Flash; provider selector UI; JSON repair; token/cost logging |
+| M14 — PDF ingestion | ✓ Done | Server-side PDF extraction via pdf-parse; 20 MB / 200 page limits; upload tab with preview |
 | M15 — Unit check v2 | Planned | Rigorous dimensional analysis with pint |
 | M16 — Authentication | Planned | Replit Auth or Clerk |
 | M17 — Multi-source | Planned | Aggregate multiple papers into one model card |
@@ -358,7 +371,7 @@ GET /                   → React app loads, demo model visible in dashboard
 
 All extraction features work in mock mode — a deterministic mock provider returns a pre-built chemostat model card with realistic equations, parameters, and a reproducibility score. The full 10-tab model card, RK4 simulator, and ZIP export all function without any API key.
 
-To enable real AI extraction, add `OPENAI_API_KEY` or `GEMINI_API_KEY` to Replit Secrets (requires M13 milestone implementation).
+To enable real AI extraction, add `OPENAI_API_KEY` or `GEMINI_API_KEY` to Replit Secrets. The provider selector on the New Extraction page lets you choose OpenAI, Gemini, or Auto (tries best available).
 
 ---
 

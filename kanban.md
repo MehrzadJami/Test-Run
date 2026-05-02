@@ -135,26 +135,39 @@
 - Both production builds verified clean: API server (esbuild bundle) + frontend (Vite static)
 - App not yet published — click "Publish" in Replit to deploy
 
+### M13 — Real AI Providers
+- `OpenAIProvider` — GPT-4o with `response_format: { type: "json_object" }`; full `ExtractionResultSchema` Zod validation
+- `GeminiProvider` — Gemini 1.5 Flash via `@google/generative-ai`; JSON mode enabled
+- Provider priority chain: user-selected → OpenAI → Gemini → Mock (automatic fallback)
+- Provider selector UI on New Extraction page (Auto / OpenAI / Gemini / Mock)
+- JSON repair pass before Zod validation — recovers from minor model formatting drift
+- Token + cost logging per extraction: provider, model, input/output tokens logged via Pino
+- `providerUsed` column on `extractions` table — enum `["mock","openai","gemini"]`
+- Shared engineering extraction system prompt in `lib/providers/prompt.ts` (LaTeX, units, Monod kinetics context)
+- Provider files: `openai-provider.ts`, `gemini-provider.ts`, `prompt.ts`
+
+### M14 — PDF Ingestion
+- `POST /api/pdf/parse` — accepts base64-encoded PDF; returns `{ text, pageCount, wordCount, charCount }`
+- Server-side extraction via `pdf-parse` v1 (pure Node.js; no browser globals; downgraded from v2 which required `DOMMatrix`)
+- Limits: 20 MB decoded size, 200 pages, minimum 30 extractable characters
+- Image-only / scanned PDFs rejected with a user-readable fallback message pointing to paste-text tab
+- OpenAPI spec updated: `ParsePdfInput` + `ParsePdfResult` schemas; codegen re-run (hooks + Zod)
+- New Extraction page: "Upload Document" tab — detects PDF vs plain text, base64-encodes file, calls `/api/pdf/parse`, shows parsed preview card (page count, char/word stats, text snippet)
+- Submit button changes to "Confirm & Extract Model" once PDF is successfully parsed
+
+### Security — Dependency Vulnerability Fixes
+- 11 transitive vulnerabilities resolved (4 high, 7 moderate) via `pnpm-workspace.yaml` overrides — no direct dependency changes
+- `picomatch@<2.3.2` → 2.3.2 (GHSA-c2c7-rcm5-vvqj, GHSA-3v7f-55p6-f55p)
+- `picomatch@>=4.0.0 <4.0.4` → 4.0.4 (same CVEs)
+- `path-to-regexp@>=8.0.0 <8.4.0` → 8.4.0 (GHSA-j3q9-mxjg-w52f, GHSA-27v5-c462-wpq7)
+- `lodash@<=4.17.23` → 4.18.1 (GHSA-r5fr-rjxr-66jc, GHSA-f23m-r3pf-42rh)
+- `brace-expansion@>=2.0.0 <2.0.3` → 2.0.3 (GHSA-f886-m6hf-6m8v)
+- `yaml@>=2.0.0 <2.8.3` → 2.8.4 (GHSA-48c2-rrv3-qjmp); added to `minimumReleaseAgeExclude`
+- `postcss@<8.5.10` → 8.5.10 (GHSA-qx2v-qp2m-jg93)
+
 ---
 
 ## ⚡ Planned
-
-### M13 — Real AI Providers
-- Provider interface already wired — `getActiveProvider()` factory exists
-- **OpenAI:** call GPT-4o with structured output (`response_format: { type: "json_object" }`) against `ExtractionResultSchema`
-- **Gemini:** call `gemini-1.5-pro` with JSON mode
-- Provider fallback chain: OpenAI → Gemini → Mock
-- Add provider selection UI (badge/dropdown on New Extraction page)
-- Cost/token usage logging per extraction
-- Add `OPENAI_API_KEY` / `GEMINI_API_KEY` to Replit Secrets to activate
-- Prompt engineering for chemical engineering domain (units, LaTeX, Monod kinetics context)
-
-### M14 — PDF Ingestion
-- Server-side PDF text extraction (`pdf-parse` or `pdfjs-dist`)
-- Binary PDF upload via multipart form (`POST /api/projects/:id/sources` extended)
-- Drag-and-drop PDF upload on New Extraction page
-- Automatic text extraction and chunking before passing to extraction provider
-- Show extracted text preview before confirming extraction
 
 ### M15 — Unit Check v2 (Rigorous Dimensional Analysis)
 - Replace heuristic checks with formal dimensional algebra
