@@ -80,10 +80,17 @@
 - Unit check warning banner (red) if any high-severity issues
 - Scrollable code viewer + "Copy to clipboard" + "Download model_template.py"
 
+### M9 — Reproducible Model Package Export
+- Client-side ZIP generation (`jszip`) — no server needed
+- "Download Package" button in model card header (Run Simulation + Export JSON preserved)
+- 14-file `model_package/` ZIP: README.md · model_card.md · variables.csv · parameters.csv · equations.md · assumptions.md · limitations.md · missing_information.md · reproducibility_report.json · unit_check_report.json · raw_extraction.json · simulate.py · requirements.txt · source_excerpt.txt
+- simulate.py reuses M8 python-generator — honest scaffold, no hallucinated code
+- README.md embeds repro score, unit check status, all gaps, and how-to-run instructions
+- source_excerpt.txt: deduplicated verbatim source quotes — the traceability record
+
 ### Canvas Kanban Board
 - Visual Kanban built directly on the Replit canvas (27 shapes)
 - 3 columns: Done · In Progress / Planned · Future Ideas
-- Mirrors this document
 
 ---
 
@@ -95,13 +102,6 @@
 - OpenAI: call GPT-4o with structured output against `ExtractionResultSchema`
 - Gemini: call `gemini-1.5-pro` with JSON mode
 - Add provider selection UI (dropdown in New Extraction page)
-
-### M9 — Reproducible Model Package Export ✅
-- Client-side ZIP generation (jszip) — no server needed
-- 14-file package: README.md, model_card.md, variables.csv, parameters.csv, equations.md, assumptions.md, limitations.md, missing_information.md, reproducibility_report.json, unit_check_report.json, raw_extraction.json, simulate.py, requirements.txt, source_excerpt.txt
-- "Download Package" button added to model card header (existing buttons preserved)
-- simulate.py is the python-generator output (honest scaffold, not hallucinated code)
-- README embeds reproducibility score, unit check status, missing gaps, and how-to-run instructions
 
 ### Exports Page — Downloads
 - Markdown model card export (human-readable `.md` file)
@@ -178,9 +178,9 @@
 - Live MathJax preview as you type
 - Save back to DB with audit trail
 
-### CI / CD Export
-- Export model package as a self-contained `.zip` (JSON + Python + README)
+### CI / CD Integration
 - GitHub Actions template for running simulation tests on every push
+- Auto-export model package on tag/release
 
 ---
 
