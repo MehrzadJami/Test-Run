@@ -26,6 +26,8 @@ export * from "./modelCardExtractionRawExtractionJson";
 export * from "./modelCardExtractionStatus";
 export * from "./parameter";
 export * from "./parameterConfidence";
+export * from "./parsePdfInput";
+export * from "./parsePdfResult";
 export * from "./project";
 export * from "./projectDetail";
 export * from "./projectExport";

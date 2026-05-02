@@ -23,6 +23,8 @@ import type {
   CreateProjectInput,
   HealthStatus,
   ModelCard,
+  ParsePdfInput,
+  ParsePdfResult,
   Project,
   ProjectDetail,
   ProjectExport,
@@ -445,6 +447,96 @@ export const useDeleteProject = <
   TContext
 > => {
   return useMutation(getDeleteProjectMutationOptions(options));
+};
+
+/**
+ * Parses a PDF server-side and returns the extracted plain text plus
+metadata (pageCount, wordCount, charCount). Limits: 20 MB, 200 pages.
+On failure the client should direct the user to paste text manually.
+
+ * @summary Extract plain text from a base64-encoded PDF
+ */
+export const getParsePdfUrl = () => {
+  return `/api/pdf/parse`;
+};
+
+export const parsePdf = async (
+  parsePdfInput: ParsePdfInput,
+  options?: RequestInit,
+): Promise<ParsePdfResult> => {
+  return customFetch<ParsePdfResult>(getParsePdfUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(parsePdfInput),
+  });
+};
+
+export const getParsePdfMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof parsePdf>>,
+    TError,
+    { data: BodyType<ParsePdfInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof parsePdf>>,
+  TError,
+  { data: BodyType<ParsePdfInput> },
+  TContext
+> => {
+  const mutationKey = ["parsePdf"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof parsePdf>>,
+    { data: BodyType<ParsePdfInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return parsePdf(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ParsePdfMutationResult = NonNullable<
+  Awaited<ReturnType<typeof parsePdf>>
+>;
+export type ParsePdfMutationBody = BodyType<ParsePdfInput>;
+export type ParsePdfMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Extract plain text from a base64-encoded PDF
+ */
+export const useParsePdf = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof parsePdf>>,
+    TError,
+    { data: BodyType<ParsePdfInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof parsePdf>>,
+  TError,
+  { data: BodyType<ParsePdfInput> },
+  TContext
+> => {
+  return useMutation(getParsePdfMutationOptions(options));
 };
 
 /**

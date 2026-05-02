@@ -109,6 +109,35 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  /pdf/parse:
+    post:
+      operationId: parsePdf
+      tags: [pdf]
+      summary: Extract plain text from a base64-encoded PDF
+      description: |
+        Parses a PDF server-side and returns the extracted plain text plus
+        metadata (pageCount, wordCount, charCount). Limits: 20 MB, 200 pages.
+        On failure the client should direct the user to paste text manually.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParsePdfInput"
+      responses:
+        "200":
+          description: Successfully extracted text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParsePdfResult"
+        "400":
+          description: PDF too large, too many pages, or parse failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
   /projects/{projectId}/sources:
     post:
       operationId: addSourceDocument
@@ -232,6 +261,32 @@ paths:
 
 components:
   schemas:
+    ParsePdfInput:
+      type: object
+      properties:
+        base64:
+          type: string
+          minLength: 1
+          description: Base64-encoded PDF file content (max 20 MB decoded).
+      required: [base64]
+
+    ParsePdfResult:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Extracted plain text content from the PDF.
+        pageCount:
+          type: integer
+          description: Number of pages in the PDF.
+        wordCount:
+          type: integer
+          description: Approximate word count of extracted text.
+        charCount:
+          type: integer
+          description: Character count of extracted text.
+      required: [text, pageCount, wordCount, charCount]
+
     HealthStatus:
       type: object
       properties:

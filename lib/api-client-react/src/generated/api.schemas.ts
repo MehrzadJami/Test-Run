@@ -5,6 +5,25 @@
  * ChemAI Model Extractor API
  * OpenAPI spec version: 0.1.0
  */
+export interface ParsePdfInput {
+  /**
+   * Base64-encoded PDF file content (max 20 MB decoded).
+   * @minLength 1
+   */
+  base64: string;
+}
+
+export interface ParsePdfResult {
+  /** Extracted plain text content from the PDF. */
+  text: string;
+  /** Number of pages in the PDF. */
+  pageCount: number;
+  /** Approximate word count of extracted text. */
+  wordCount: number;
+  /** Character count of extracted text. */
+  charCount: number;
+}
+
 export interface HealthStatus {
   status: string;
 }

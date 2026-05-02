@@ -95,6 +95,28 @@ export const DeleteProjectParams = zod.object({
 });
 
 /**
+ * Parses a PDF server-side and returns the extracted plain text plus
+metadata (pageCount, wordCount, charCount). Limits: 20 MB, 200 pages.
+On failure the client should direct the user to paste text manually.
+
+ * @summary Extract plain text from a base64-encoded PDF
+ */
+
+export const ParsePdfBody = zod.object({
+  base64: zod
+    .string()
+    .min(1)
+    .describe("Base64-encoded PDF file content (max 20 MB decoded)."),
+});
+
+export const ParsePdfResponse = zod.object({
+  text: zod.string().describe("Extracted plain text content from the PDF."),
+  pageCount: zod.number().describe("Number of pages in the PDF."),
+  wordCount: zod.number().describe("Approximate word count of extracted text."),
+  charCount: zod.number().describe("Character count of extracted text."),
+});
+
+/**
  * @summary Add a source document (raw text or pasted PDF text) to a project
  */
 export const AddSourceDocumentParams = zod.object({

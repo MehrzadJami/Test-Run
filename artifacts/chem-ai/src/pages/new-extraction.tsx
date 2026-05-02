@@ -43,6 +43,9 @@ import {
   TriangleAlert,
   Zap,
   Bot,
+  CheckCircle2,
+  XCircle,
+  FileSearch,
 } from "lucide-react";
 
 // ─── Provider config ──────────────────────────────────────────────────────────
@@ -175,31 +178,71 @@ LIMITATIONS
   - kLa is assumed scale-independent, which may not hold for large vessels.`,
 };
 
+// ─── PDF parse helpers ────────────────────────────────────────────────────────
+
+const MAX_TXT_BYTES = 10 * 1024 * 1024; // 10 MB for plain text files
+const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB for PDF files
+
+interface ParsedPdf {
+  name: string;
+  text: string;
+  pageCount: number;
+  charCount: number;
+  wordCount: number;
+}
+
+/** Read a File as a base64 data-URL and strip the header prefix. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(",")[1] ?? "";
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
-const MAX_BYTES = 10 * 1024 * 1024;
+// How many characters of PDF extracted text to show in the preview
+const PREVIEW_CHARS = 1800;
 
 export default function NewExtraction() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
 
+  // ── Form state ──────────────────────────────────────────────────────────────
   const [title, setTitle] = useState("");
   const [pastedText, setPastedText] = useState("");
   const [activeTab, setActiveTab] = useState<"upload" | "paste">("paste");
+  const [selectedProvider, setSelectedProvider] =
+    useState<ProviderChoice>("auto");
+
+  // ── Text file upload state ──────────────────────────────────────────────────
   const [uploadedFile, setUploadedFile] = useState<{
     name: string;
     content: string;
   } | null>(null);
-  const [selectedProvider, setSelectedProvider] =
-    useState<ProviderChoice>("auto");
+
+  // ── PDF upload state ────────────────────────────────────────────────────────
+  const [parsedPdf, setParsedPdf] = useState<ParsedPdf | null>(null);
+  const [isParsing, setIsParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [showFullPreview, setShowFullPreview] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Mutations ───────────────────────────────────────────────────────────────
   const createProject = useCreateProject();
   const addSource = useAddSourceDocument();
   const createExtraction = useCreateExtraction();
 
   const isBusy =
+    isParsing ||
     createProject.isPending ||
     addSource.isPending ||
     createExtraction.isPending;
@@ -209,6 +252,21 @@ export default function NewExtraction() {
     selectedProvider === "gemini" ||
     selectedProvider === "auto";
 
+  // ── Derived source content ──────────────────────────────────────────────────
+  function getSourceContent(): string {
+    if (activeTab === "upload") {
+      if (parsedPdf) return parsedPdf.text;
+      return uploadedFile?.content ?? "";
+    }
+    return pastedText;
+  }
+
+  function getSourceKind(): "text" | "pdf" {
+    if (activeTab === "upload" && parsedPdf) return "pdf";
+    return "text";
+  }
+
+  // ── Demo loader ─────────────────────────────────────────────────────────────
   function loadDemo(type: "chemostat" | "bioreactor") {
     const demo = type === "chemostat" ? DEMO_CHEMOSTAT : DEMO_BIOREACTOR;
     setActiveTab("paste");
@@ -220,19 +278,23 @@ export default function NewExtraction() {
     });
   }
 
-  function handleFile(file: File) {
-    if (file.size > MAX_BYTES) {
+  // ── Plain text file handler ─────────────────────────────────────────────────
+  function handleTextFile(file: File) {
+    if (file.size > MAX_TXT_BYTES) {
       toast({
         title: "File too large",
-        description: "Max upload size is 10 MB.",
+        description: "Max size for text files is 10 MB.",
         variant: "destructive",
       });
       return;
     }
+    // Clear any PDF state when switching to a text file
+    setParsedPdf(null);
+    setParseError(null);
+
     const reader = new FileReader();
     reader.onload = () => {
-      const text = String(reader.result ?? "");
-      setUploadedFile({ name: file.name, content: text });
+      setUploadedFile({ name: file.name, content: String(reader.result ?? "") });
     };
     reader.onerror = () => {
       toast({
@@ -244,17 +306,85 @@ export default function NewExtraction() {
     reader.readAsText(file);
   }
 
+  // ── PDF file handler ────────────────────────────────────────────────────────
+  async function handlePdfFile(file: File) {
+    if (file.size > MAX_PDF_BYTES) {
+      const mb = (file.size / 1024 / 1024).toFixed(1);
+      setParseError(
+        `PDF is ${mb} MB — the limit is 20 MB. Paste the relevant sections manually instead.`,
+      );
+      return;
+    }
+
+    // Clear previous results
+    setUploadedFile(null);
+    setParsedPdf(null);
+    setParseError(null);
+    setShowFullPreview(false);
+    setIsParsing(true);
+
+    try {
+      const base64 = await fileToBase64(file);
+
+      const response = await fetch("/api/pdf/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64 }),
+      });
+
+      const data = (await response.json()) as
+        | { text: string; pageCount: number; charCount: number; wordCount: number }
+        | { error: string };
+
+      if (!response.ok || "error" in data) {
+        const msg =
+          "error" in data
+            ? data.error
+            : "PDF parsing failed. Please paste the text manually.";
+        setParseError(msg);
+        return;
+      }
+
+      setParsedPdf({
+        name: file.name,
+        text: data.text,
+        pageCount: data.pageCount,
+        charCount: data.charCount,
+        wordCount: data.wordCount,
+      });
+    } catch {
+      setParseError(
+        "Could not reach the server while parsing the PDF. Please check your connection or paste the text manually.",
+      );
+    } finally {
+      setIsParsing(false);
+    }
+  }
+
+  // ── File picker dispatcher ──────────────────────────────────────────────────
+  function handleFileChosen(file: File) {
+    const isPdf =
+      file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (isPdf) {
+      void handlePdfFile(file);
+    } else {
+      handleTextFile(file);
+    }
+  }
+
+  // ── Extraction submit ───────────────────────────────────────────────────────
   async function handleExtract() {
+    const sourceContent = getSourceContent();
+    const sourceKind = getSourceKind();
     const isUpload = activeTab === "upload";
-    const sourceContent = isUpload
-      ? (uploadedFile?.content ?? "")
-      : pastedText;
 
     if (!sourceContent.trim()) {
       toast({
         title: "No source provided",
         description: isUpload
-          ? "Upload a .txt file first."
+          ? parsedPdf === null
+            ? "Upload a PDF or .txt file first."
+            : "No text was extracted from the PDF."
           : "Paste source text first, or load a demo.",
         variant: "destructive",
       });
@@ -262,7 +392,7 @@ export default function NewExtraction() {
     }
 
     const fallbackTitle = isUpload
-      ? (uploadedFile?.name ?? "Untitled extraction")
+      ? (parsedPdf?.name ?? uploadedFile?.name ?? "Untitled extraction")
       : (sourceContent.split(/\r?\n/).find((l) => l.trim()) ??
           "Untitled extraction"
         ).slice(0, 80);
@@ -277,8 +407,10 @@ export default function NewExtraction() {
       await addSource.mutateAsync({
         projectId: project.id,
         data: {
-          kind: isUpload ? "pdf" : "text",
-          filename: isUpload ? (uploadedFile?.name ?? null) : null,
+          kind: sourceKind,
+          filename: isUpload
+            ? (parsedPdf?.name ?? uploadedFile?.name ?? null)
+            : null,
           content: sourceContent,
         },
       });
@@ -310,6 +442,7 @@ export default function NewExtraction() {
     }
   }
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-5xl mx-auto space-y-8">
 
@@ -392,15 +525,15 @@ export default function NewExtraction() {
             <CardHeader>
               <CardTitle>Extraction Source</CardTitle>
               <CardDescription>
-                Provide the source material for the model extraction.
+                Upload a PDF or plain-text file, or paste text directly.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Tabs
                 value={activeTab}
-                onValueChange={(v) =>
-                  setActiveTab(v === "upload" ? "upload" : "paste")
-                }
+                onValueChange={(v) => {
+                  setActiveTab(v === "upload" ? "upload" : "paste");
+                }}
                 className="w-full"
               >
                 <TabsList className="grid w-full grid-cols-2 mb-6">
@@ -412,13 +545,39 @@ export default function NewExtraction() {
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="upload">
+                {/* ── Upload tab ── */}
+                <TabsContent value="upload" className="space-y-4">
+
+                  {/* Dropzone */}
                   <div
-                    className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-12 flex flex-col items-center justify-center text-center bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer"
-                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-10 flex flex-col items-center justify-center text-center bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer"
+                    onClick={() => !isBusy && fileInputRef.current?.click()}
                     data-testid="dropzone-upload"
                   >
-                    {uploadedFile ? (
+                    {isParsing ? (
+                      <>
+                        <Loader2 className="h-10 w-10 text-primary mb-4 animate-spin" />
+                        <h3 className="text-base font-semibold">Parsing PDF…</h3>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Extracting text server-side, please wait.
+                        </p>
+                      </>
+                    ) : parsedPdf ? (
+                      <>
+                        <CheckCircle2 className="h-10 w-10 text-green-500 mb-4" />
+                        <h3 className="text-base font-semibold">
+                          {parsedPdf.name}
+                        </h3>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {parsedPdf.pageCount} pages ·{" "}
+                          {parsedPdf.charCount.toLocaleString()} characters ·{" "}
+                          {parsedPdf.wordCount.toLocaleString()} words
+                        </p>
+                        <p className="text-xs text-muted-foreground/70 mt-1">
+                          Click to replace
+                        </p>
+                      </>
+                    ) : uploadedFile ? (
                       <>
                         <FileText className="h-10 w-10 text-primary mb-4" />
                         <h3 className="text-base font-semibold">
@@ -429,34 +588,118 @@ export default function NewExtraction() {
                           characters loaded — click to replace
                         </p>
                       </>
+                    ) : parseError ? (
+                      <>
+                        <XCircle className="h-10 w-10 text-destructive mb-4" />
+                        <h3 className="text-base font-semibold text-destructive">
+                          Parse failed
+                        </h3>
+                        <p className="text-sm text-muted-foreground mt-1 max-w-xs">
+                          {parseError}
+                        </p>
+                        <p className="text-xs text-muted-foreground/70 mt-2">
+                          Click to try another file
+                        </p>
+                      </>
                     ) : (
                       <>
                         <UploadCloud className="h-10 w-10 text-muted-foreground mb-4" />
                         <h3 className="text-base font-semibold">
-                          Click to upload a text file
+                          Click to upload
                         </h3>
                         <p className="text-sm text-muted-foreground mt-1">
-                          .txt only — or paste PDF text on the other tab
+                          PDF (text-based) or .txt file
                         </p>
                         <p className="text-xs text-muted-foreground/60 mt-0.5">
-                          Max 10 MB
+                          PDF max 20 MB · 200 pages · text-based only
                         </p>
                       </>
                     )}
+
                     <input
                       type="file"
                       className="hidden"
                       ref={fileInputRef}
-                      accept=".txt,text/plain"
+                      accept=".pdf,application/pdf,.txt,text/plain"
                       data-testid="input-file"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
-                        if (file) handleFile(file);
+                        if (file) handleFileChosen(file);
+                        // reset so the same file can be re-selected
+                        e.target.value = "";
                       }}
                     />
                   </div>
+
+                  {/* ── PDF extracted text preview ── */}
+                  {parsedPdf && (
+                    <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <FileSearch className="h-4 w-4 text-green-600 dark:text-green-400" />
+                          <span className="text-sm font-semibold text-green-800 dark:text-green-300">
+                            Extracted text preview
+                          </span>
+                        </div>
+                        <div className="flex gap-2">
+                          <Badge variant="outline" className="text-xs">
+                            {parsedPdf.pageCount} pages
+                          </Badge>
+                          <Badge variant="outline" className="text-xs">
+                            {parsedPdf.charCount.toLocaleString()} chars
+                          </Badge>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-muted-foreground">
+                        Review the extracted text below, then click{" "}
+                        <strong>Extract Model</strong> to proceed.
+                      </p>
+
+                      <div className="relative">
+                        <pre className="text-xs font-mono bg-background/70 border rounded p-3 max-h-52 overflow-y-auto whitespace-pre-wrap break-words text-foreground/80 leading-relaxed">
+                          {showFullPreview
+                            ? parsedPdf.text
+                            : parsedPdf.text.slice(0, PREVIEW_CHARS)}
+                          {!showFullPreview &&
+                            parsedPdf.text.length > PREVIEW_CHARS && (
+                              <span className="text-muted-foreground">
+                                {"\n"}…
+                              </span>
+                            )}
+                        </pre>
+                        {parsedPdf.text.length > PREVIEW_CHARS && (
+                          <button
+                            className="mt-1 text-xs text-primary hover:underline"
+                            onClick={() =>
+                              setShowFullPreview((v) => !v)
+                            }
+                          >
+                            {showFullPreview
+                              ? "Show less"
+                              : `Show all ${parsedPdf.charCount.toLocaleString()} characters`}
+                          </button>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        If the text looks garbled or missing equations, the PDF
+                        may be image-based. Switch to the Paste Text tab and
+                        paste the content manually.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Error hint below dropzone (additional context) */}
+                  {parseError && (
+                    <p className="text-xs text-muted-foreground">
+                      Tip: Use the <strong>Paste Text</strong> tab to paste
+                      content from a PDF viewer directly.
+                    </p>
+                  )}
                 </TabsContent>
 
+                {/* ── Paste tab (unchanged) ── */}
                 <TabsContent value="paste">
                   <div className="space-y-3">
                     <Label htmlFor="raw-text" className="text-sm font-medium">
@@ -495,7 +738,10 @@ export default function NewExtraction() {
 
               {/* Provider selector */}
               <div className="space-y-2">
-                <Label htmlFor="provider-select" className="text-sm font-medium flex items-center gap-1.5">
+                <Label
+                  htmlFor="provider-select"
+                  className="text-sm font-medium flex items-center gap-1.5"
+                >
                   <Bot className="h-3.5 w-3.5" />
                   AI Provider
                 </Label>
@@ -526,7 +772,6 @@ export default function NewExtraction() {
                   </SelectContent>
                 </Select>
 
-                {/* Provider status badge */}
                 {selectedProvider === "mock" && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
@@ -581,23 +826,28 @@ export default function NewExtraction() {
                 disabled={isBusy}
                 data-testid="btn-extract"
               >
-                {isBusy ? (
+                {isParsing ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {isRealProvider
-                      ? "Extracting with AI…"
-                      : "Extracting…"}
+                    Parsing PDF…
                   </>
+                ) : isBusy ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    {isRealProvider ? "Extracting with AI…" : "Extracting…"}
+                  </>
+                ) : parsedPdf ? (
+                  "Confirm & Extract Model"
                 ) : (
                   "Extract Model"
                 )}
               </Button>
-              {isBusy && isRealProvider && (
+              {isBusy && !isParsing && isRealProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
                   Calling AI provider — this may take 10–30 seconds…
                 </p>
               )}
-              {isBusy && !isRealProvider && (
+              {isBusy && !isParsing && !isRealProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
                   Creating project and running extraction…
                 </p>
@@ -624,6 +874,11 @@ export default function NewExtraction() {
                 </li>
               ))}
             </ul>
+            <p className="pt-1 border-t border-border/50">
+              <strong className="text-foreground">PDF tip:</strong> Text-based
+              PDFs only. For scanned documents, copy-paste from your PDF
+              viewer.
+            </p>
           </div>
         </div>
       </div>
