@@ -99,7 +99,12 @@ For the living Kanban board, see `kanban.md`.
 
 ## Planned Milestones
 
-### M12 — Real AI Providers
+### M12 — Portability & Development Handoff ✓ Done
+- Replit pnpm monorepo migration
+- Name standardization ("ChemAI Model Compiler" everywhere)
+- Environment configuration, `.env.example`, deployment prep
+
+### M13 — Real AI Providers
 - `OpenAIProvider` — GPT-4o with structured output (JSON mode)
 - `GeminiProvider` — Gemini 1.5 Pro with JSON mode
 - Runtime provider selection via `getActiveProvider()` based on env vars
@@ -107,27 +112,32 @@ For the living Kanban board, see `kanban.md`.
 - Provider fallback chain: OpenAI → Gemini → Mock
 - Cost / token usage logging
 
-### M13 — PDF Ingestion
+### M14 — PDF Ingestion
 - Server-side PDF text extraction (e.g., `pdf-parse` or `pdfjs-dist`)
 - Binary PDF upload via multipart form
 - Automatic text extraction and chunking
 
-### M14 — Unit Check v2
+### M15 — Unit Check v2
 - Replace heuristic with rigorous dimensional analysis using `pint` (Python) or a TypeScript unit library
 - Explicit dimensional algebra for each equation term
 - Report by equation, not just by term
 
-### M15 — Authentication
+### M16 — Authentication
 - Replit Auth (OpenID Connect) or Clerk
 - Per-user project isolation
 - Public / private model card visibility
 
-### M16 — Multi-source Projects
+### M17 — Multi-source Projects
 - Attach multiple source documents to one project
 - Aggregate model card across sources
 - Conflict detection when the same parameter appears with different values across sources
 
-### M17 — Automated Tests
+### M18 — Inline Editing
+- Edit extracted fields directly in the model card UI
+- Field-level save with optimistic updates
+- Audit trail of manual edits vs AI-extracted values
+
+### M19 — Automated Tests
 - Vitest unit tests: `analyzeReproducibility`, `runUnitCheck`, `generatePythonOdeTemplate`, `generateModelPackage`
 - API integration tests for all routes
 - Playwright E2E tests for the extraction workflow

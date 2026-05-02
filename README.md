@@ -287,12 +287,14 @@ All requests go through the shared proxy at `localhost:80`. Do not call service 
 | M9 — Model package export | ✓ Done | 14-file ZIP (JSZip, client-side) |
 | M10 — UI polish | ✓ Done | Demo workflow, empty states, exports page |
 | M11 — Documentation | ✓ Done | README, ARCHITECTURE, API, LOCAL_SETUP, ROADMAP, SCHEMA |
-| M12 — Real AI providers | Planned | OpenAI GPT-4o + Gemini 1.5 Pro structured output |
-| M13 — PDF ingestion | Planned | Server-side PDF text extraction |
-| M14 — Unit check v2 | Planned | Rigorous dimensional analysis with pint |
-| M15 — Authentication | Planned | Replit Auth or Clerk |
-| M16 — Multi-source | Planned | Aggregate multiple papers into one model card |
-| M17 — Automated tests | Planned | Vitest unit tests, Playwright E2E |
+| M12 — Portability & dev handoff | ✓ Done | Replit monorepo migration, env config, name standardization |
+| M13 — Real AI providers | Planned | OpenAI GPT-4o + Gemini 1.5 Pro structured output |
+| M14 — PDF ingestion | Planned | Server-side PDF text extraction |
+| M15 — Unit check v2 | Planned | Rigorous dimensional analysis with pint |
+| M16 — Authentication | Planned | Replit Auth or Clerk |
+| M17 — Multi-source | Planned | Aggregate multiple papers into one model card |
+| M18 — Inline editing | Planned | Edit extracted fields directly in the model card UI |
+| M19 — Automated tests | Planned | Vitest unit tests, Playwright E2E |
 | Future | Idea | MATLAB / Julia / Modelica stubs, bulk export, peer review workflow |
 
 ---
@@ -316,7 +318,7 @@ ChemAI Model Compiler is a two-service pnpm monorepo. Replit's publishing tool h
 | Secret | Where to get it | Required? |
 |---|---|---|
 | `DATABASE_URL` | Added automatically by the Replit PostgreSQL integration | **Yes** |
-| `SESSION_SECRET` | `openssl rand -hex 32` | Reserved — needed when auth (M15) is added |
+| `SESSION_SECRET` | `openssl rand -hex 32` | Reserved — needed when auth (M16) is added |
 | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) | No — app runs in mock mode without it |
 | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) | No — app runs in mock mode without it |
 
