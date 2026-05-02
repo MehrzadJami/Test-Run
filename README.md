@@ -6,6 +6,18 @@ It is a research scaffold tool, not a validated simulation platform or certified
 
 ---
 
+## Quick Demo
+
+1. Open the app at `/`
+2. Click **View Demo Model** to open the seeded chemostat model card
+3. Explore all 10 tabs — Overview, Equations, Variables, Parameters, Assumptions, Limitations, Missing Info, Unit Check, Reproducibility, ODE Template
+4. Navigate to `/simulation` → click **Run simulation** → download the time-series CSV
+5. Click **Download Package** in the model card header to get the 14-file ZIP
+
+No sign-in required. No API key required for the demo — extractions run on MockProvider by default.
+
+---
+
 ## 1. Problem
 
 Chemical and biochemical engineers routinely build simulation models from published papers. That workflow looks like this:
@@ -34,7 +46,7 @@ This takes hours per paper. Much of it is copy-paste work that does not require 
 | Parameters table with values and confidence | ✗ | ✓ |
 | Flag missing information explicitly | ✗ | ✓ |
 | Reproducibility score (0–100) | ✗ | ✓ |
-| Unit dimension check | ✗ | ✓ |
+| Heuristic unit & consistency checks | ✗ | ✓ |
 | Python ODE scaffold (scipy.integrate) | ✗ | ✓ |
 | 14-file reproducible model package ZIP | ✗ | ✓ |
 
@@ -44,7 +56,7 @@ NotebookLM is a general document assistant. ChemAI Model Compiler is a domain-sp
 
 ## 3. Why this is not a black-box industrial optimizer
 
-Industrial bioprocess platforms (e.g., Novatek, DASGIP, ambr) optimize validated processes from experimental sensor data. They assume a working, calibrated model exists.
+Industrial bioprocess and digital-twin platforms optimize validated processes from experimental or sensor data. They assume a working, calibrated model exists.
 
 ChemAI Model Compiler works at the step *before* that:
 
@@ -97,7 +109,7 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Download simulation output as CSV
 
 **Exports**
-- Model Package ZIP (14 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_info.md`, `reproduce.md`, `unit_check_report.json`, `reproducibility_report.json`, `simulate.py`, `source_excerpt.txt`, `metadata.json`
+- Model Package ZIP (14 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `requirements.txt`, `source_excerpt.txt`
 - Python ODE template (`simulate.py`): parameters pre-filled, equation bodies marked TODO, readiness banners included
 - Simulation CSV: time-series (t, X, S) from the browser RK4 solver
 
@@ -155,7 +167,7 @@ The application ships with a seeded demo model (project ID 1):
 6. Navigate to `/new` → click **Monod Chemostat (Andrews 1968)** to pre-fill the paste tab
 7. Click **Extract Model** to create a second extraction
 
-No API key is required for the demo. All extractions use `MockProvider`.
+No API key is required for the demo. Without API keys, extractions use MockProvider. With `OPENAI_API_KEY` or `GEMINI_API_KEY` configured, real providers can be selected on the New Extraction page.
 
 ---
 
@@ -163,8 +175,9 @@ No API key is required for the demo. All extractions use `MockProvider`.
 
 ```bash
 # 1. Clone the repository
-git clone <repo-url>
-cd chemengai-model-compiler
+git clone https://github.com/MehrzadJami/Test-Run
+cd Test-Run
+# Note: the repository can later be renamed to chemai-model-compiler
 
 # 2. Install dependencies (requires Node 20+ and pnpm 9+)
 pnpm install
@@ -289,20 +302,20 @@ All requests go through the shared proxy at `localhost:80`. Do not call service 
 
 | Milestone | Status | Description |
 |---|---|---|
-| M1 — Scaffold | ✓ Done | pnpm monorepo, Express 5, PostgreSQL, Drizzle |
-| M2 — Ingestion | ✓ Done | Source document upload + paste |
-| M3 — Extraction engine | ✓ Done | Provider interface, MockProvider, Zod validation |
-| M4 — Model card display | ✓ Done | 10-tab UI, equations, variables, parameters |
-| M5 — Structured data tabs | ✓ Done | Full tables with source quotes |
-| M6 — Missing information | ✓ Done | Gap detection with severity levels |
-| M7 — Reproducibility scoring | ✓ Done | 0–100 score across 8 sub-dimensions |
-| M8 — Python ODE template | ✓ Done | scipy.integrate scaffold, parameter pre-fill |
-| M9 — Model package export | ✓ Done | 14-file ZIP (JSZip, client-side) |
-| M10 — UI polish | ✓ Done | Demo workflow, empty states, exports page |
-| M11 — Documentation | ✓ Done | README, ARCHITECTURE, API, LOCAL_SETUP, ROADMAP, SCHEMA |
-| M12 — Portability & dev handoff | ✓ Done | Replit monorepo migration, env config, name standardization |
-| M13 — Real AI providers | ✓ Done | OpenAI GPT-4o + Gemini 1.5 Flash; provider selector UI; JSON repair; token/cost logging |
-| M14 — PDF ingestion | ✓ Done | Server-side PDF extraction via pdf-parse; 20 MB / 200 page limits; upload tab with preview |
+| M1 — Full-stack Scaffold | ✓ Done | pnpm monorepo, Express 5, PostgreSQL, Drizzle |
+| M2 — AI Extraction Engine | ✓ Done | Provider interface, MockProvider, Zod validation |
+| M3 — Database Schema & Seeding | ✓ Done | projects→extractions schema, cascade deletes, demo seed |
+| M4 — Branding & Landing Page | ✓ Done | Product name, hero section, comparison cards, homepage |
+| M5 — Model Card — 10-Tab View | ✓ Done | 10-tab UI, equations, variables, parameters, source quotes |
+| M6 — Reproducibility Scoring Engine | ✓ Done | 0–100 score across 8 sub-dimensions |
+| M7 — Unit & Dimension Checker | ✓ Done | Heuristic checks, badge in model card header |
+| M8 — Python ODE Template Generator | ✓ Done | scipy.integrate scaffold, parameter pre-fill |
+| M9 — Reproducible Model Package Export | ✓ Done | 14-file ZIP (JSZip, client-side) |
+| M10 — UI Polish & Demo Readiness | ✓ Done | Demo workflow, empty states, exports page |
+| M11 — README & Documentation | ✓ Done | README, ARCHITECTURE, API, LOCAL_SETUP, ROADMAP, SCHEMA |
+| M12 — Portability & Development Handoff | ✓ Done | Replit monorepo migration, env config, name standardization |
+| M13 — Real AI Providers | ✓ Done | OpenAI GPT-4o + Gemini 1.5 Flash; provider selector UI; JSON repair; token/cost logging |
+| M14 — PDF Ingestion | ✓ Done | Server-side PDF extraction via pdf-parse; 20 MB / 200 page limits; upload tab with preview |
 | M15 — Unit check v2 | Planned | Rigorous dimensional analysis with pint |
 | M16 — Authentication | Planned | Replit Auth or Clerk |
 | M17 — Multi-source | Planned | Aggregate multiple papers into one model card |

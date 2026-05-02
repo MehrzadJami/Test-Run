@@ -91,10 +91,10 @@
   - `parameters.csv` — symbol, value, unit, confidence, source_quote
   - `assumptions.md` — all assumptions with source context
   - `limitations.md` — all limitations with source context
-  - `missing_info.md` — missing information with severity levels
-  - `reproduce.md` — reproducibility score breakdown
-  - `reproducibility_report.json` — score breakdown JSON
-  - `unit_check_report.json` — dimensional check results
+  - `missing_information.md` — missing information with severity levels
+  - `reproducibility_report.json` — score breakdown (machine-readable)
+  - `unit_check_report.json` — unit check results (machine-readable)
+  - `raw_extraction.json` — raw extraction JSON from the provider
   - `simulate.py` — Python ODE scaffold (reuses M8 generator)
   - `requirements.txt` — `numpy`, `scipy`, `matplotlib`
   - `source_excerpt.txt` — deduplicated verbatim source quotes (traceability record)
