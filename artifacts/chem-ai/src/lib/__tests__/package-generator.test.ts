@@ -87,17 +87,18 @@ const EXPECTED_FILES = [
   "unit_check_report.json",
   "raw_extraction.json",
   "simulate.py",
+  "model_notebook.ipynb",
   "requirements.txt",
   "source_excerpt.txt",
 ];
 
 describe("generateModelPackage — file inventory", () => {
-  it("returns exactly 14 files", () => {
+  it("returns exactly 15 files", () => {
     const files = generateModelPackage(baseInput());
-    expect(Object.keys(files)).toHaveLength(14);
+    expect(Object.keys(files)).toHaveLength(15);
   });
 
-  it("contains all 14 expected filenames", () => {
+  it("contains all 15 expected filenames", () => {
     const files = generateModelPackage(baseInput());
     for (const name of EXPECTED_FILES) {
       expect(Object.keys(files)).toContain(name);
@@ -129,6 +130,13 @@ describe("generateModelPackage — README.md", () => {
   it("contains the reproducibility score", () => {
     const files = generateModelPackage(baseInput());
     expect(files["README.md"]).toContain("65");
+  });
+
+  it("contains review status section", () => {
+    const files = generateModelPackage(baseInput({ review: { status: "needs_review", review_notes: "Check ICs" } }));
+    expect(files["README.md"]).toContain("Human review notes");
+    expect(files["README.md"]).toContain("needs_review");
+    expect(files["README.md"]).toContain("Check ICs");
   });
 });
 
@@ -236,7 +244,7 @@ describe("generateModelPackage — missing_information.md", () => {
 // ─── Edge cases ───────────────────────────────────────────────────────────────
 
 describe("generateModelPackage — edge cases", () => {
-  it("returns 14 files even with all empty arrays", () => {
+  it("returns 15 files even with all empty arrays", () => {
     const input = baseInput({
       equations: [],
       variables: [],
@@ -245,7 +253,7 @@ describe("generateModelPackage — edge cases", () => {
       limitationItems: [],
     });
     const files = generateModelPackage(input);
-    expect(Object.keys(files)).toHaveLength(14);
+    expect(Object.keys(files)).toHaveLength(15);
   });
 
   it("CSV cells with commas are properly quoted", () => {

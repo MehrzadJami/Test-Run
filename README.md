@@ -109,7 +109,8 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Download simulation output as CSV
 
 **Exports**
-- Model Package ZIP (14 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `requirements.txt`, `source_excerpt.txt`
+- Model Package ZIP (15 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `model_notebook.ipynb`, `requirements.txt`, `source_excerpt.txt`
+- Jupyter Notebook export (`model_notebook.ipynb`) from each model card, including summary, tables, equations, missing info, reproducibility/unit checks, and simulation scaffold cells
 - Python ODE template (`simulate.py`): parameters pre-filled, equation bodies marked TODO, readiness banners included
 - Simulation CSV: time-series (t, X, S) from the browser RK4 solver
 
@@ -126,6 +127,24 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Pino structured logging (JSON) on the API server
 - pnpm monorepo with `@workspace/*` shared libraries
 - 11 transitive dependency vulnerabilities patched via `pnpm-workspace.yaml` overrides (picomatch, path-to-regexp, lodash, brace-expansion, yaml, postcss)
+
+---
+
+## 5.1 Current Gaps & Bug-Hunt Priorities (May 2026)
+
+This project has moved fast and currently has several areas that need a dedicated stability sprint:
+
+- **PDF extraction quality variability** on some non-scanned PDFs (parser output can still be low-quality depending on document structure).
+- **Simulation trustworthiness** is still constrained by model compatibility; some flows fall back to demo assumptions.
+- **Provider UX consistency** (runtime keys/providers added incrementally; needs a unified settings/diagnostics experience).
+- **Documentation drift risk** after rapid milestone shipping (feature counts, route tables, and behavior notes can desync).
+- **Multi-source aggregation robustness** requires deeper fixture coverage and conflict-resolution UX.
+
+Planned remediation is tracked in `kanban.md` under:
+- **M27 Stability & Bug-Hunt Hardening**
+- **M28 OCR & Document Ingestion Quality**
+- **M29 Simulation Reliability Upgrade**
+- **M30 Provider UX & Security Hardening**
 
 ---
 
