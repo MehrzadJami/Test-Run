@@ -17,12 +17,12 @@ import {
   AddSourceDocumentParams,
   AddSourceDocumentBody,
   CreateExtractionParams,
-  CreateExtractionBody,
   GetModelCardByProjectParams,
   ExportProjectParams,
   UpdateProjectVisibilityParams,
   UpdateProjectVisibilityBody,
 } from "@workspace/api-zod";
+import { z } from "zod/v4";
 import {
   runExtraction,
   mapExtractionToDb,
@@ -32,6 +32,10 @@ import {
 import { classifyModel } from "@workspace/domain-classifier";
 
 const router: IRouter = Router();
+const CreateExtractionBodyLocal = z.object({
+  provider: z.enum(["auto", "mock", "openai", "gemini", "ollama"]).optional(),
+  sourceDocumentId: z.number().int().positive().optional(),
+});
 
 // ---------- access helpers ----------
 
@@ -318,7 +322,7 @@ router.post(
       res.status(400).json({ error: params.error.message });
       return;
     }
-    const body = CreateExtractionBody.safeParse(req.body ?? {});
+    const body = CreateExtractionBodyLocal.safeParse(req.body ?? {});
     if (!body.success) {
       res.status(400).json({ error: body.error.message });
       return;
@@ -367,9 +371,14 @@ router.post(
     //    (or undefined to use the auto fallback chain).
     let extracted;
     try {
+      const openaiApiKey = req.header("x-openai-api-key") ?? undefined;
+      const geminiApiKey = req.header("x-gemini-api-key") ?? undefined;
+      const ollamaBaseUrl = req.header("x-ollama-base-url") ?? undefined;
+      const ollamaModel = req.header("x-ollama-model") ?? undefined;
       extracted = await runExtraction(
         source.content,
         body.data.provider ?? undefined,
+        { openaiApiKey, geminiApiKey, ollamaBaseUrl, ollamaModel },
       );
     } catch (err) {
       if (err instanceof ExtractionInputError) {

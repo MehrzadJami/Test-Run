@@ -4,14 +4,6 @@ import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./prompt";
 
 // Singleton — one client per process lifetime; key read at call time, not module
 // load time, so tests / env changes don't require a restart.
-let _client: OpenAI | null = null;
-function getClient(): OpenAI {
-  if (!_client) {
-    _client = new OpenAI({ apiKey: process.env["OPENAI_API_KEY"] });
-  }
-  return _client;
-}
-
 export interface OpenAITokenMeta {
   promptTokens: number;
   completionTokens: number;
@@ -28,9 +20,11 @@ export class OpenAIProvider implements ExtractionProvider {
   readonly name: ProviderName = "openai";
 
   private readonly model: string;
+  private readonly apiKey?: string;
 
-  constructor(model = "gpt-4o") {
+  constructor(model = "gpt-4o", apiKey?: string) {
     this.model = model;
+    this.apiKey = apiKey;
   }
 
   async extract(sourceText: string): Promise<{
@@ -39,7 +33,9 @@ export class OpenAIProvider implements ExtractionProvider {
     providerModel: string;
     systemPrompt: string;
   }> {
-    const client = getClient();
+    const client = new OpenAI({
+      apiKey: this.apiKey ?? process.env["OPENAI_API_KEY"],
+    });
 
     const response = await client.chat.completions.create({
       model: this.model,
