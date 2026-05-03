@@ -342,6 +342,21 @@ export async function runExtraction(
     );
   }
 
+  const hasOpenAI = !!(runtimeKeys?.openaiApiKey || process.env["OPENAI_API_KEY"]);
+  const hasGemini = !!(runtimeKeys?.geminiApiKey || process.env["GEMINI_API_KEY"]);
+  if (preferred === "openai" && !hasOpenAI) {
+    throw new ExtractionProviderError(
+      "OpenAI provider selected but OPENAI_API_KEY is not configured.",
+      "openai",
+    );
+  }
+  if (preferred === "gemini" && !hasGemini) {
+    throw new ExtractionProviderError(
+      "Gemini provider selected but GEMINI_API_KEY is not configured.",
+      "gemini",
+    );
+  }
+
   const provider = getActiveProvider(preferred, runtimeKeys);
 
   // Call the provider, catching any thrown error.
