@@ -2014,7 +2014,7 @@ function loadLocalReview(projectId: string | number): LocalReviewData {
 }
 
 function setAndPersistReview(
-  projectId: string,
+
   projectId: string | number,
   setState: (next: LocalReviewData) => void,
   next: LocalReviewData,

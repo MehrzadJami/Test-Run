@@ -7,10 +7,10 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "pnpm -w run typecheck:libs && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:unit": "vitest run --config vitest.config.ts src/lib/__tests__",
-    "test:api": "vitest run --config vitest.config.ts src/routes/__tests__",
+    "test:api": "sh -c 'if [ -z \"$DATABASE_URL\" ]; then echo \"DATABASE_URL is required for API tests. Set DATABASE_URL and ensure Postgres is running.\"; exit 1; fi; vitest run --config vitest.config.ts src/routes/__tests__'",
     "test:watch": "vitest --config vitest.config.ts",
     "ci": "pnpm run typecheck && pnpm run test && pnpm run build"
   },
