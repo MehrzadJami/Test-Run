@@ -7,6 +7,7 @@
     "hello": "tsx ./src/hello.ts",
     "export-data": "tsx ./src/export-data.ts",
     "import-data": "tsx ./src/import-data.ts",
+    "verify-real-extraction": "tsx ./src/verify-real-extraction.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

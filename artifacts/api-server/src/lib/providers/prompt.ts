@@ -16,6 +16,7 @@ The JSON must exactly match the following schema:
 
 {
   "paper_title_or_topic": "<string — title or descriptive topic of the source>",
+  "model_type": "<one of: monod_chemostat, fed_batch, batch_culture, cstr, pfr, enzyme_kinetics, gas_liquid, microalgae_photobioreactor, oxygen_balanced_mixotrophy, unknown>",
   "system_type": "<string — e.g. CSTR, PFR, bioreactor, heat exchanger, distillation column, absorption column, membrane reactor, batch reactor, fed-batch, chemostat, tubular reactor, etc.>",
   "process_description": "<string — detailed description: physical setup, operating mode (batch/continuous/fed-batch), temperatures, pressures, key assumptions about the process>",
   "state_variables": [
@@ -75,14 +76,29 @@ The JSON must exactly match the following schema:
   }
 }
 
+Classify "model_type" first before extracting the remaining fields:
+- dilution rate D + continuous culture + biomass/substrate -> monod_chemostat
+- variable volume or feed F(t) -> fed_batch
+- closed system, no inlet/outlet -> batch_culture
+- well-mixed reactor with residence time -> cstr
+- axial/spatial coordinate z -> pfr
+- Vmax/Km/substrate/product -> enzyme_kinetics
+- kLa/Henry/DO/O2/CO2 -> gas_liquid
+- light/PFD/PBR/microalgae -> microalgae_photobioreactor
+- DO-controlled acetate-fed mixotrophy -> oxygen_balanced_mixotrophy
+- unclear -> unknown
+
 Rules:
-1. Extract ONLY information present in the source text. Do not fabricate parameter values.
+1. Extract ONLY information present in the source text. Do not fabricate or hallucinate parameter values, equations, states, or assumptions.
 2. Use "unknown" for numeric values not stated in the source.
-3. For confidence: "high" = explicitly stated with value/unit, "medium" = implied or computed, "low" = inferred or uncertain.
-4. Focus on quantitative model structure: equations, states, parameters. Do not summarize narrative.
-5. Use proper LaTeX for equations: fractions as \\frac{}{}, Greek letters as \\mu, \\alpha, etc.
-6. Return empty arrays [] for sections with no extracted items.
-7. Return ONLY the raw JSON — no markdown, no code fences, no explanation.`;
+3. Preserve source_context for every extracted item using an exact quote or close source-grounded paraphrase.
+4. Distinguish dynamic ODEs from algebraic yield, productivity, stoichiometric, or reporting calculations. Put algebraic calculations in equations only when explicitly present, and explain they are not dynamic balances.
+5. Mark missing model pieces explicitly in model_card.missing_information and limitations; do not fill them in.
+6. For confidence: "high" = explicitly stated with value/unit, "medium" = implied or computed, "low" = inferred or uncertain.
+7. Focus on quantitative model structure: equations, states, parameters. Do not summarize narrative.
+8. Use proper LaTeX for equations: fractions as \\frac{}{}, Greek letters as \\mu, \\alpha, etc.
+9. Return empty arrays [] for sections with no extracted items.
+10. Return ONLY the raw JSON — no markdown, no code fences, no explanation.`;
 
 export function buildUserMessage(sourceText: string): string {
   return `Extract the mathematical model from the following scientific/engineering text:\n\n${sourceText}`;

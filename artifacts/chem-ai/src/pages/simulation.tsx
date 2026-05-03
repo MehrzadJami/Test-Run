@@ -453,6 +453,9 @@ export default function Simulation() {
             Chemostat / Monod kinetics — solved in-browser with 4th-order
             Runge-Kutta
           </p>
+          <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+            Demo / supported-model simulation, not a universal simulator.
+          </p>
           <p className="text-xs text-muted-foreground mt-1">
             This demo solver is not automatically generated from arbitrary model cards yet.
           </p>

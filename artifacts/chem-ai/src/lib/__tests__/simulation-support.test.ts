@@ -19,7 +19,7 @@ describe("simulation support detection", () => {
 
   it("exposes the unsupported simulation message", () => {
     expect(SIMULATION_UNSUPPORTED_MESSAGE).toBe(
-      "Simulation is currently available only for Monod chemostat demo models.",
+      "Simulation is currently available only for supported Monod/batch chemostat models. Download the scaffold instead.",
     );
   });
 });

@@ -1,5 +1,5 @@
 export const SIMULATION_UNSUPPORTED_MESSAGE =
-  "Simulation is currently available only for Monod chemostat demo models.";
+  "Simulation is currently available only for supported Monod/batch chemostat models. Download the scaffold instead.";
 
 export type SimulationSupportInput = {
   modelType?: string | null;

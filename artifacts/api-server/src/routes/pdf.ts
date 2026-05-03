@@ -16,6 +16,11 @@
 
 import { Router, type IRouter } from "express";
 import { z } from "zod/v4";
+import {
+  buildStructuredPdfDocument,
+  SCANNED_PDF_MESSAGE,
+  type StructuredPdfDocument,
+} from "../lib/pdf-document";
 // pdf-parse v1 is a CJS module. esbuild handles CJS→ESM interop at build time.
 // We import from the inner lib path to avoid the test-runner guard in index.js.
 import { createRequire } from "node:module";
@@ -25,6 +30,16 @@ const require = createRequire(import.meta.url);
 type PdfParseResult = {
   text: string;
   numpages: number;
+};
+type PdfTextItem = {
+  str: string;
+  transform?: unknown[];
+};
+type PdfPageData = {
+  getTextContent(opts: {
+    normalizeWhitespace: boolean;
+    disableCombineTextItems: boolean;
+  }): Promise<{ items: PdfTextItem[] }>;
 };
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
 const pdfParse: (
@@ -66,39 +81,68 @@ type PdfDiagnostics = {
   extractionMode: "default" | "normalized_whitespace" | "ocr_hook";
 };
 
-function computePerPageCharCounts(text: string, pageCount: number): number[] {
-  if (pageCount <= 1) return [text.length];
-  const pageBreaks = text.split(/\f|\n\s*\n\s*\n/g).map((s) => s.trim());
-  if (pageBreaks.length >= pageCount) {
-    return pageBreaks.slice(0, pageCount).map((s) => s.length);
-  }
-  const avg = Math.floor(text.length / pageCount);
-  const arr = Array.from({ length: pageCount }, () => avg);
-  arr[pageCount - 1] += text.length - avg * pageCount;
-  return arr;
+function renderPdfPage(
+  pageData: PdfPageData,
+  opts: { normalizeWhitespace: boolean; disableCombineTextItems: boolean },
+): Promise<string> {
+  return pageData.getTextContent(opts).then((textContent) => {
+    let lastY: unknown;
+    let text = "";
+    for (const item of textContent.items) {
+      const y = Array.isArray(item.transform) ? item.transform[5] : undefined;
+      if (lastY === y || lastY == null) {
+        text += item.str;
+      } else {
+        text += `\n${item.str}`;
+      }
+      lastY = y;
+    }
+    return text;
+  });
+}
+
+async function parsePdfWithPages(
+  pdfBuffer: Buffer,
+  opts: { normalizeWhitespace: boolean; disableCombineTextItems: boolean },
+): Promise<{ parseResult: PdfParseResult; pageTexts: string[] }> {
+  const pageTexts: string[] = [];
+  const parseResult = await pdfParse(pdfBuffer, {
+    pagerender: async (pageData: PdfPageData) => {
+      const text = await renderPdfPage(pageData, opts);
+      pageTexts.push(text);
+      return text;
+    },
+  });
+  return { parseResult, pageTexts };
 }
 
 async function extractWithFallback(pdfBuffer: Buffer): Promise<{
   parseResult: PdfParseResult;
+  pageTexts: string[];
   diagnostics: PdfDiagnostics;
 }> {
   const warnings: string[] = [];
 
-  const first = await pdfParse(pdfBuffer);
-  let text = (first.text ?? "").trim();
+  const first = await parsePdfWithPages(pdfBuffer, {
+    normalizeWhitespace: false,
+    disableCombineTextItems: false,
+  });
+  let text = (first.parseResult.text ?? "").trim();
   let mode: PdfDiagnostics["extractionMode"] = "default";
+  let pageTexts = first.pageTexts;
 
   if (text.length < OCR_MIN_CHARS) {
     warnings.push(
       "Low extracted text on first pass; retrying with normalized whitespace settings.",
     );
-    const second = await pdfParse(pdfBuffer, {
+    const second = await parsePdfWithPages(pdfBuffer, {
       normalizeWhitespace: true,
       disableCombineTextItems: false,
     });
-    const secondText = (second.text ?? "").trim();
+    const secondText = (second.parseResult.text ?? "").trim();
     if (secondText.length > text.length) {
       text = secondText;
+      pageTexts = second.pageTexts;
       mode = "normalized_whitespace";
     }
   }
@@ -110,15 +154,15 @@ async function extractWithFallback(pdfBuffer: Buffer): Promise<{
     mode = "ocr_hook";
   }
 
-  const parseResult: PdfParseResult = { text, numpages: first.numpages };
+  const parseResult: PdfParseResult = { text, numpages: first.parseResult.numpages };
   const diagnostics: PdfDiagnostics = {
     totalChars: text.length,
-    pageCount: first.numpages,
-    perPageCharCounts: computePerPageCharCounts(text, first.numpages),
+    pageCount: parseResult.numpages,
+    perPageCharCounts: pageTexts.map((pageText) => pageText.trim().length),
     warnings,
     extractionMode: mode,
   };
-  return { parseResult, diagnostics };
+  return { parseResult, pageTexts, diagnostics };
 }
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -158,10 +202,12 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
 
   // Parse the PDF
   let parseResult: PdfParseResult;
+  let pageTexts: string[];
   let diagnostics: PdfDiagnostics;
   try {
     const out = await extractWithFallback(pdfBuffer);
     parseResult = out.parseResult;
+    pageTexts = out.pageTexts;
     diagnostics = out.diagnostics;
   } catch (err) {
     req.log.warn(
@@ -190,14 +236,30 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
   const text = (parseResult.text ?? "").trim();
   if (text.length < MIN_TEXT_CHARS) {
     res.status(400).json({
-      error:
-        "No readable text was found in this PDF. It may be an image-based or scanned document. " +
-        "Please paste the text content manually on the 'Paste Text' tab.",
+      error: SCANNED_PDF_MESSAGE,
     });
     return;
   }
 
   const wordCount = text.split(/\s+/).filter(Boolean).length;
+  const structuredDocument: StructuredPdfDocument = buildStructuredPdfDocument({
+    pageTexts,
+    pageCount: parseResult.numpages,
+    warnings: diagnostics.warnings,
+  });
+  diagnostics = {
+    ...diagnostics,
+    warnings: structuredDocument.diagnostics.warnings,
+  };
+
+  if (structuredDocument.diagnostics.text_quality === "fallback_required") {
+    res.status(400).json({
+      error: SCANNED_PDF_MESSAGE,
+      diagnostics,
+      structuredDocument,
+    });
+    return;
+  }
 
   req.log.info(
     { pages: parseResult.numpages, chars: text.length, words: wordCount },
@@ -210,6 +272,7 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
     wordCount,
     charCount: text.length,
     diagnostics,
+    structuredDocument,
   });
 });
 

@@ -54,6 +54,13 @@ import {
   RULE_BASED_MODE_DESCRIPTION,
   type ProviderChoice,
 } from "@/lib/mock-provider-disclosure";
+import {
+  PDF_FALLBACK_MESSAGE,
+  buildParsedPdfSourcePayload,
+  buildTextSourcePayload,
+  parsedPdfNeedsFallback,
+  type ParsedPdfForExtraction,
+} from "@/lib/pdf-extraction-flow";
 
 // ─── Demo source texts ────────────────────────────────────────────────────────
 
@@ -159,13 +166,7 @@ LIMITATIONS
 const MAX_TXT_BYTES = 10 * 1024 * 1024; // 10 MB for plain text files
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB for PDF files
 
-interface ParsedPdf {
-  name: string;
-  text: string;
-  pageCount: number;
-  charCount: number;
-  wordCount: number;
-}
+type ParsedPdf = ParsedPdfForExtraction;
 
 /** Read a File as a base64 data-URL and strip the header prefix. */
 function fileToBase64(file: File): Promise<string> {
@@ -278,11 +279,6 @@ export default function NewExtraction() {
     return pastedText;
   }
 
-  function getSourceKind(): "text" | "pdf" {
-    if (activeTab === "upload" && parsedPdf) return "pdf";
-    return "text";
-  }
-
   // ── Demo loader ─────────────────────────────────────────────────────────────
   function loadDemo(type: "chemostat" | "bioreactor") {
     const demo = type === "chemostat" ? DEMO_CHEMOSTAT : DEMO_BIOREACTOR;
@@ -350,7 +346,13 @@ export default function NewExtraction() {
       });
 
       const data = (await response.json()) as
-        | { text: string; pageCount: number; charCount: number; wordCount: number }
+        | {
+            text: string;
+            pageCount: number;
+            charCount: number;
+            wordCount: number;
+            structuredDocument?: ParsedPdf["structuredDocument"];
+          }
         | { error: string };
 
       if (!response.ok || "error" in data) {
@@ -362,12 +364,21 @@ export default function NewExtraction() {
         return;
       }
 
-      setParsedPdf({
+      const nextParsedPdf: ParsedPdf = {
         name: file.name,
         text: data.text,
         pageCount: data.pageCount,
         charCount: data.charCount,
         wordCount: data.wordCount,
+        structuredDocument: data.structuredDocument,
+      };
+      if (parsedPdfNeedsFallback(nextParsedPdf)) {
+        setParseError(PDF_FALLBACK_MESSAGE);
+        return;
+      }
+
+      setParsedPdf({
+        ...nextParsedPdf,
       });
     } catch {
       setParseError(
@@ -392,7 +403,6 @@ export default function NewExtraction() {
   // ── Extraction submit ───────────────────────────────────────────────────────
   async function handleExtract() {
     const sourceContent = getSourceContent();
-    const sourceKind = getSourceKind();
     const isUpload = activeTab === "upload";
 
     if (!sourceContent.trim()) {
@@ -421,15 +431,17 @@ export default function NewExtraction() {
         data: { name: projectName, description: "" },
       });
 
+      const sourcePayload =
+        parsedPdf && isUpload
+          ? buildParsedPdfSourcePayload(parsedPdf)
+          : buildTextSourcePayload(
+              sourceContent,
+              isUpload ? (uploadedFile?.name ?? null) : null,
+            );
+
       await addSource.mutateAsync({
         projectId: project.id,
-        data: {
-          kind: sourceKind,
-          filename: isUpload
-            ? (parsedPdf?.name ?? uploadedFile?.name ?? null)
-            : null,
-          content: sourceContent,
-        },
+        data: sourcePayload,
       });
       const extractionRes = await fetch(`/api/projects/${project.id}/extractions`, {
         method: "POST",
@@ -960,7 +972,9 @@ export default function NewExtraction() {
                 ) : isBusy ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {isMockDemoProvider
+                    {parsedPdf
+                      ? "Extracting model from PDF..."
+                      : isMockDemoProvider
                       ? "Running Mock demo…"
                       : isRuleBasedProvider
                       ? "Running rule-based local extraction…"
@@ -975,7 +989,9 @@ export default function NewExtraction() {
               {isBusy && !isParsing && !isMockDemoProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
                   {isRuleBasedProvider
-                    ? "Extracting obvious equations, parameters, and units with deterministic local patterns…"
+                    ? parsedPdf
+                      ? "Extracting model from PDF..."
+                      : "Extracting obvious equations, parameters, and units with deterministic local patterns…"
                     : "Running the selected provider. Auto uses Rule-based local mode before Mock when no configured provider is available."}
                 </p>
               )}

@@ -84,6 +84,7 @@ if __name__ == "__main__":
 const CHEMOSTAT_RAW_EXTRACTION: ExtractionResult = {
   paper_title_or_topic:
     "Continuous chemostat — substrate-limited microalgae growth",
+  model_type: "monod_chemostat",
   system_type: "Biochemical engineering",
   process_description:
     "Constant-volume, constant-flow chemostat with substrate-limited algal growth following Monod kinetics. Well mixed, isothermal, fixed photon flux folded into mu_max.",

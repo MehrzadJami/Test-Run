@@ -20,6 +20,19 @@ export const ExtendedRoleSchema = z.enum([
   "control",
 ]);
 
+export const ModelTypeSchema = z.enum([
+  "monod_chemostat",
+  "fed_batch",
+  "batch_culture",
+  "cstr",
+  "pfr",
+  "enzyme_kinetics",
+  "gas_liquid",
+  "microalgae_photobioreactor",
+  "oxygen_balanced_mixotrophy",
+  "unknown",
+]);
+
 export const StateVariableSchema = z.object({
   symbol: z.string().min(1, "Variable symbol is required"),
   name: z.string(),
@@ -73,6 +86,7 @@ export const ModelCardMetaSchema = z.object({
 
 export const ExtractionResultSchema = z.object({
   paper_title_or_topic: z.string().min(1),
+  model_type: ModelTypeSchema,
   system_type: z.string(),
   process_description: z.string(),
   state_variables: z.array(StateVariableSchema),
@@ -84,6 +98,7 @@ export const ExtractionResultSchema = z.object({
 });
 
 export type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
+export type ExtractedModelType = z.infer<typeof ModelTypeSchema>;
 export type ExtractedStateVariable = z.infer<typeof StateVariableSchema>;
 export type ExtractedParameter = z.infer<typeof ParameterSchema>;
 export type ExtractedEquation = z.infer<typeof EquationSchema>;

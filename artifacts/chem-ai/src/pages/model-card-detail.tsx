@@ -698,6 +698,7 @@ function ModelCardDetailInner({
           <Badge
             variant="outline"
             className={`text-[10px] font-mono ${scoreTextColor(report.overall_score)}`}
+            title="Heuristic estimate — not a peer-reviewed metric."
           >
             Repro: {report.overall_score}/100
           </Badge>
@@ -1582,6 +1583,9 @@ function ModelCardDetailInner({
                 {report.overall_score}
               </div>
               <p className="text-xs text-muted-foreground mt-1">out of 100</p>
+              <p className="text-xs text-muted-foreground mt-3 max-w-[180px]">
+                Heuristic estimate — not a peer-reviewed metric.
+              </p>
             </Card>
 
             <Card>

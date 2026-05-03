@@ -44,7 +44,7 @@ import {
 } from "./extraction-schema";
 import { OpenAIProvider } from "./providers/openai-provider";
 import { GeminiProvider } from "./providers/gemini-provider";
-import { OllamaProvider } from "./providers/ollama-provider";
+import { OllamaPaperUnderstandingProvider } from "./providers/ollama-paper-understanding-provider";
 import { RuleBasedProvider } from "./providers/rule-based-provider";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./providers/prompt";
 import { logger } from "./logger";
@@ -120,7 +120,7 @@ export type AuditData = {
 };
 
 const PROMPT_TEMPLATE_SUMMARY =
-  "Extracts a quantitative chemical engineering model (state variables, ODEs, parameters, assumptions, model card) from scientific/engineering text into a structured JSON object matching ExtractionResultSchema.";
+  "Classifies model_type, then extracts a quantitative chemical engineering model (state variables, ODEs, parameters, assumptions, model card) from scientific/engineering text into a structured JSON object matching ExtractionResultSchema.";
 
 // ---------- Mock provider ----------
 
@@ -144,6 +144,7 @@ class MockProvider implements ExtractionProvider {
     const title = deriveTitle(sourceText);
     return {
       paper_title_or_topic: title,
+      model_type: "unknown",
       system_type: "Generic dynamic system (mock)",
       process_description:
         "Mock extraction generated without a real AI provider configured. " +
@@ -281,7 +282,7 @@ function tryRepairJson(raw: unknown): unknown {
  *  - "rule_based" → always RuleBasedProvider
  *  - "openai"     → OpenAIProvider if OPENAI_API_KEY present, else auto-fallback
  *  - "gemini"     → GeminiProvider if GEMINI_API_KEY present, else auto-fallback
- *  - "ollama"     → OllamaProvider if configured, else auto-fallback
+ *  - "ollama"     → OllamaPaperUnderstandingProvider using configured/default local Ollama
  *  - "auto" / undefined → OpenAI → Gemini → Ollama → RuleBasedProvider → Mock
  */
 export function getActiveProvider(
@@ -309,15 +310,22 @@ export function getActiveProvider(
   if (preferred === "gemini" && hasGemini) {
     return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
   }
-  if (preferred === "ollama" && hasOllama) {
-    return new OllamaProvider(runtimeKeys?.ollamaBaseUrl, runtimeKeys?.ollamaModel);
+  if (preferred === "ollama") {
+    return new OllamaPaperUnderstandingProvider(
+      runtimeKeys?.ollamaBaseUrl,
+      runtimeKeys?.ollamaModel,
+    );
   }
 
   // Auto fallback chain (also used when preferred key is not configured)
   if (hasOpenAI) return new OpenAIProvider("gpt-4o", runtimeKeys?.openaiApiKey);
   if (hasGemini)
     return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
-  if (hasOllama) return new OllamaProvider(runtimeKeys?.ollamaBaseUrl, runtimeKeys?.ollamaModel);
+  if (hasOllama)
+    return new OllamaPaperUnderstandingProvider(
+      runtimeKeys?.ollamaBaseUrl,
+      runtimeKeys?.ollamaModel,
+    );
   try {
     return new RuleBasedProvider();
   } catch {
@@ -368,17 +376,40 @@ export async function runExtraction(
     );
   }
 
-  const provider = getActiveProvider(preferred, runtimeKeys);
+  let provider = getActiveProvider(preferred, runtimeKeys);
 
   // Call the provider, catching any thrown error.
   let providerOutput: unknown;
   try {
     providerOutput = await provider.extract(trimmed);
   } catch (err) {
-    throw new ExtractionProviderError(
-      `Provider threw: ${err instanceof Error ? err.message : String(err)}`,
-      provider.name,
-    );
+    if ((preferred == null || preferred === "auto") && provider.name === "ollama") {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Ollama unavailable during auto extraction; falling back to RuleBasedProvider",
+      );
+      try {
+        provider = new RuleBasedProvider();
+        providerOutput = await provider.extract(trimmed);
+      } catch (fallbackErr) {
+        logger.warn(
+          {
+            err:
+              fallbackErr instanceof Error
+                ? fallbackErr.message
+                : String(fallbackErr),
+          },
+          "RuleBasedProvider failed during auto extraction; falling back to MockProvider",
+        );
+        provider = new MockProvider();
+        providerOutput = await provider.extract(trimmed);
+      }
+    } else {
+      throw new ExtractionProviderError(
+        `Provider threw: ${err instanceof Error ? err.message : String(err)}`,
+        provider.name,
+      );
+    }
   }
 
   // Real providers return { raw, tokenMeta, providerModel, systemPrompt };
@@ -401,9 +432,10 @@ export async function runExtraction(
       tokenMeta: unknown;
       providerModel?: string;
       systemPrompt?: string;
+      rawProviderResponse?: unknown;
     };
     candidate = typed.raw;
-    rawProviderResponse = typed.raw;
+    rawProviderResponse = typed.rawProviderResponse ?? typed.raw;
     tokenMeta =
       typed.tokenMeta && typeof typed.tokenMeta === "object"
         ? (typed.tokenMeta as Record<string, unknown>)

@@ -4,6 +4,7 @@ import type {
   ExtractedAssumption,
   ExtractedEquation,
   ExtractedLimitation,
+  ExtractedModelType,
   ExtractedParameter,
   ExtractedStateVariable,
 } from "../extraction-schema";
@@ -103,6 +104,19 @@ function cleanLine(line: string): string {
 }
 
 function inferSystemType(normalizedLower: string): string {
+  const modelType = inferModelType(normalizedLower);
+  if (modelType === "oxygen_balanced_mixotrophy") {
+    return "Oxygen-balanced mixotrophic photobioreactor model";
+  }
+  if (modelType === "microalgae_photobioreactor") {
+    return "Microalgae photobioreactor model";
+  }
+  if (modelType === "fed_batch") return "Fed-batch reactor model";
+  if (modelType === "batch_culture") return "Batch culture model";
+  if (modelType === "cstr") return "Continuous stirred-tank reactor model";
+  if (modelType === "pfr") return "Plug-flow reactor model";
+  if (modelType === "enzyme_kinetics") return "Enzyme kinetics model";
+
   const explicitChemostat =
     /\bchemostat\b/.test(normalizedLower) ||
     /\bdilution\s+rate\b/.test(normalizedLower);
@@ -122,6 +136,79 @@ function inferSystemType(normalizedLower: string): string {
     return "Chemostat / Monod growth model";
   }
   return "Generic ODE model";
+}
+
+function hasDoControl(normalizedLower: string): boolean {
+  return (
+    /\bdo\b[^.]{0,80}\b(control|controlled|setpoint|set point)\b/.test(
+      normalizedLower,
+    ) ||
+    /\bdissolved\s+oxygen\b[^.]{0,80}\b(control|controlled|setpoint|set point)\b/.test(
+      normalizedLower,
+    ) ||
+    /\b(control|controlled|setpoint|set point)\b[^.]{0,80}\b(do|dissolved\s+oxygen)\b/.test(
+      normalizedLower,
+    )
+  );
+}
+
+function inferModelType(normalizedLower: string): ExtractedModelType {
+  const hasAcetate = /\bacetate\b|\bacetic\s+acid\b|\bch3coo\b/.test(
+    normalizedLower,
+  );
+  const hasMixotrophy =
+    /\bmixotroph|\bmixotrophy|\bheterotroph|\bautotroph/.test(normalizedLower);
+  const hasPbr =
+    /\bmicroalgae\b|\bphotobioreactor\b|\bpbr\b|\bpfd\b|\blight\b|\bphoton\b/.test(
+      normalizedLower,
+    );
+
+  if (hasAcetate && hasDoControl(normalizedLower) && (hasMixotrophy || hasPbr)) {
+    return "oxygen_balanced_mixotrophy";
+  }
+  if (
+    /\bchemostat\b|\bdilution\s+rate\b|\bcontinuous\s+culture\b/.test(
+      normalizedLower,
+    ) &&
+    (/\bbiomass\b|\bsubstrate\b|\bmonod\b|\bmumax\b|\bks\b/.test(normalizedLower))
+  ) {
+    return "monod_chemostat";
+  }
+  if (
+    /\bkla\b|\bhenry\b|\bgas[-\s]?liquid\b|\bdissolved\s+oxygen\b|\bdo\b|\bo2\b|\bco2\b/.test(
+      normalizedLower,
+    )
+  ) {
+    return "gas_liquid";
+  }
+  if (hasPbr) return "microalgae_photobioreactor";
+  if (
+    /\bfed[-\s]?batch\b|\bvariable\s+volume\b|\bfeed\s+f\s*\(\s*t\s*\)|\bf\s*\(\s*t\s*\)/.test(
+      normalizedLower,
+    )
+  ) {
+    return "fed_batch";
+  }
+  if (/\bpfr\b|\bplug[-\s]?flow\b|\baxial\b|\bspatial\b|\bcoordinate\s+z\b/.test(normalizedLower)) {
+    return "pfr";
+  }
+  if (/\bvmax\b|\bkm\b|\bmichaelis\b|\benzyme\b/.test(normalizedLower)) {
+    return "enzyme_kinetics";
+  }
+  if (
+    /\bbatch\b|\bclosed\s+system\b|\bno\s+inlet\b|\bno\s+outlet\b/.test(
+      normalizedLower,
+    )
+  ) {
+    return "batch_culture";
+  }
+  if (/\bcstr\b|\bwell[-\s]?mixed\b.*\bresidence\s+time\b|\bresidence\s+time\b.*\bwell[-\s]?mixed\b/.test(normalizedLower)) {
+    return "cstr";
+  }
+  if (/\bmonod\b|\bmumax\b|\bks\b/.test(normalizedLower)) {
+    return "monod_chemostat";
+  }
+  return "unknown";
 }
 
 function meaningForEquation(line: string): string {
@@ -513,6 +600,7 @@ function fallbackResult(sourceText: string): ExtractionResult {
   const title = deriveTitle(sourceText);
   return {
     paper_title_or_topic: title,
+    model_type: "unknown",
     system_type: "Generic ODE model",
     process_description:
       "Rule-based extraction completed with no reliable structured model patterns detected.",
@@ -551,6 +639,7 @@ export class RuleBasedProvider implements ExtractionProvider {
       const safeSource = safeText(sourceText);
       const title = deriveTitle(safeSource);
       const normalizedLower = normalizeSymbols(safeSource).toLowerCase();
+      const modelType = inferModelType(normalizedLower);
       const systemType = inferSystemType(normalizedLower);
       const equations = extractEquations(safeSource, normalizedLower);
       const parameters = extractParameters(safeSource);
@@ -574,6 +663,7 @@ export class RuleBasedProvider implements ExtractionProvider {
 
       return {
         paper_title_or_topic: title,
+        model_type: modelType,
         system_type: systemType,
         process_description:
           "Offline rule-based extraction from explicit equations, numeric assignments, and keyword-matched assumptions or limitations in the source text.",

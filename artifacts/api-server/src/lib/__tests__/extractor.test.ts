@@ -8,6 +8,7 @@ import {
   MIN_SOURCE_CHARS,
 } from "../extractor";
 import { ExtractionResultSchema } from "../extraction-schema";
+import { OllamaPaperUnderstandingProvider } from "../providers/ollama-paper-understanding-provider";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -16,6 +17,7 @@ const SUFFICIENT_TEXT = "A".repeat(MIN_SOURCE_CHARS + 1);
 function validExtractionResult() {
   return {
     paper_title_or_topic: "Test Paper",
+    model_type: "cstr" as const,
     system_type: "CSTR",
     process_description: "Continuously stirred tank reactor model.",
     state_variables: [
@@ -76,6 +78,112 @@ function validExtractionResult() {
   };
 }
 
+function validPaperUnderstanding() {
+  const context = {
+    page_start: 1,
+    page_end: 1,
+    section_heading: "Methods",
+    source_kind: "methods" as const,
+    confidence: "high" as const,
+  };
+  return {
+    paper_title: "Monod chemostat paper",
+    paper_type: "modeling" as const,
+    model_type: "monod_chemostat" as const,
+    main_system: "Continuous chemostat",
+    organism_or_material: "microbial culture",
+    process_type: "substrate-limited growth",
+    operating_mode: "continuous culture",
+    experimental_setup: [
+      {
+        item: "Chemostat setup",
+        details: "A continuous chemostat was operated at dilution rate D.",
+        source_context: "A continuous chemostat was operated at dilution rate D.",
+        ...context,
+      },
+    ],
+    candidate_state_variables: [
+      {
+        symbol: "X",
+        name: "Biomass concentration",
+        meaning: "Biomass concentration in the reactor.",
+        unit: "g/L",
+        role: "state" as const,
+        source_context: "Biomass X and substrate S were modeled.",
+        ...context,
+      },
+      {
+        symbol: "S",
+        name: "Substrate concentration",
+        meaning: "Substrate concentration in the reactor.",
+        unit: "g/L",
+        role: "state" as const,
+        source_context: "Biomass X and substrate S were modeled.",
+        ...context,
+      },
+    ],
+    candidate_parameters: [
+      {
+        symbol: "D",
+        name: "Dilution rate",
+        value: "0.1",
+        unit: "1/h",
+        source_context: "D = 0.1 1/h.",
+        ...context,
+      },
+    ],
+    candidate_equations: [
+      {
+        label: "(1)",
+        equation_plaintext: "dX/dt = (mu - D)*X",
+        equation_latex: "\\frac{dX}{dt} = (\\mu - D)X",
+        equation_type: "dynamic_ode" as const,
+        meaning: "Biomass dynamic balance.",
+        variables_involved: ["X", "mu", "D"],
+        source_context: "dX/dt = (mu - D)*X.",
+        ...context,
+      },
+    ],
+    tables_or_reported_values: [],
+    controls_and_setpoints: [
+      {
+        variable: "D",
+        value: "0.1",
+        unit: "1/h",
+        control_type: "operator-set dilution rate",
+        source_context: "D = 0.1 1/h.",
+        ...context,
+      },
+    ],
+    assumptions: [
+      {
+        item: "Well mixed",
+        details: "The reactor is well mixed.",
+        source_context: "The reactor is well mixed.",
+        ...context,
+      },
+    ],
+    limitations_or_missing_info: [
+      {
+        item: "Initial conditions",
+        details: "Initial conditions were not reported.",
+        source_context: "Initial conditions were not reported.",
+        confidence: "medium" as const,
+        page_start: 1,
+        page_end: 1,
+        section_heading: "Methods",
+        source_kind: "methods" as const,
+      },
+    ],
+    referenced_external_sources_needed: [],
+  };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
 // ─── MockProvider via getActiveProvider ──────────────────────────────────────
 
 describe("getActiveProvider", () => {
@@ -100,6 +208,11 @@ describe("getActiveProvider", () => {
     process.env["OPENAI_API_KEY"] = "sk-fake";
     const p = getActiveProvider("rule_based");
     expect(p.name).toBe("rule_based");
+  });
+
+  it("returns ollama provider when explicitly requested", () => {
+    const p = getActiveProvider("ollama");
+    expect(p.name).toBe("ollama");
   });
 
   it("returns openai when OPENAI_API_KEY is present and preferred", () => {
@@ -197,6 +310,7 @@ describe("MockProvider — ExtractionResultSchema validity", () => {
     expect(providerName).toBe("mock");
     const parsed = ExtractionResultSchema.safeParse(result);
     expect(parsed.success).toBe(true);
+    expect(result.model_type).toBe("unknown");
   });
 
   it("derives title from first non-empty line of source text", async () => {
@@ -209,6 +323,113 @@ describe("MockProvider — ExtractionResultSchema validity", () => {
     const { result } = await runExtraction(longLine, "mock");
     expect(result.paper_title_or_topic.length).toBeLessThanOrEqual(92);
     expect(result.paper_title_or_topic.endsWith("...")).toBe(true);
+  });
+});
+
+// ─── OllamaPaperUnderstandingProvider output and fallback ───────────────────
+
+describe("OllamaPaperUnderstandingProvider", () => {
+  beforeEach(() => {
+    delete process.env["OPENAI_API_KEY"];
+    delete process.env["GEMINI_API_KEY"];
+    delete process.env["OLLAMA_BASE_URL"];
+  });
+
+  it("maps mocked Ollama paper-understanding JSON into a valid extraction result", async () => {
+    const response = `\`\`\`json\n${JSON.stringify(validPaperUnderstanding())}\n\`\`\``;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        response,
+        prompt_eval_count: 100,
+        eval_count: 40,
+        total_duration: 1234,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result, providerName, audit } = await runExtraction(
+      SUFFICIENT_TEXT,
+      "ollama",
+      { ollamaBaseUrl: "http://localhost:11434", ollamaModel: "llama3.1" },
+    );
+
+    expect(providerName).toBe("ollama");
+    expect(result.model_type).toBe("monod_chemostat");
+    expect(result.state_variables.map((v) => v.symbol)).toEqual(
+      expect.arrayContaining(["X", "S"]),
+    );
+    expect(result.model_card.can_generate_ode_template).toBe(true);
+    expect(audit.providerModel).toBe("llama3.1");
+    expect(audit.systemPrompt).toContain("PaperUnderstanding");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("accepts structured document chunks and includes page context in the prompt", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ response: JSON.stringify(validPaperUnderstanding()) }),
+    });
+    const provider = new OllamaPaperUnderstandingProvider(
+      "http://localhost:11434",
+      "llama3.1",
+      fetchMock as unknown as typeof fetch,
+    );
+
+    const output = await provider.extractFromChunks([
+      {
+        chunk_id: "pdf_001",
+        page_start: 2,
+        page_end: 3,
+        section_heading: "Materials and Methods",
+        text: "A continuous chemostat was operated at dilution rate D.",
+        char_count: 58,
+      },
+    ]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
+      prompt: string;
+    };
+    expect(body.prompt).toContain(
+      '[pdf_001; pages 2-3; section="Materials and Methods"]',
+    );
+    expect(output.raw.model_type).toBe("monod_chemostat");
+    expect(ExtractionResultSchema.safeParse(output.raw).success).toBe(true);
+  });
+
+  it("returns a useful error when explicitly selected Ollama is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+    await expect(
+      runExtraction(SUFFICIENT_TEXT, "ollama", {
+        ollamaBaseUrl: "http://localhost:11434",
+        ollamaModel: "llama3.1",
+      }),
+    ).rejects.toMatchObject({
+      name: "ExtractionProviderError",
+      providerName: "ollama",
+      message: expect.stringContaining("Ollama is unavailable"),
+    });
+  });
+
+  it("falls back to RuleBasedProvider when auto-selected Ollama is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+    const { result, providerName } = await runExtraction(
+      "A continuous chemostat is modeled with biomass X and substrate S. " +
+        "The growth rate is mu = mumax*S/(Ks+S). " +
+        "The biomass balance is dX/dt = (mu - D)*X. " +
+        "Parameters are mumax = 0.8 1/h and D = 0.1 1/h.",
+      "auto",
+      { ollamaBaseUrl: "http://localhost:11434", ollamaModel: "llama3.1" },
+    );
+
+    expect(providerName).toBe("rule_based");
+    expect(result.model_type).toBe("monod_chemostat");
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
   });
 });
 
@@ -251,6 +472,7 @@ describe("RuleBasedProvider", () => {
 
     expect(providerName).toBe("rule_based");
     expect(audit.providerModel).toBe("rule_based");
+    expect(result.model_type).toBe("monod_chemostat");
     expect(result.system_type).toContain("Chemostat");
 
     expect(variableBySymbol.get("X")).toMatchObject({
@@ -300,6 +522,7 @@ describe("RuleBasedProvider", () => {
     const equationTexts = result.equations.map((eq) => eq.equation_plaintext);
 
     expect(providerName).toBe("rule_based");
+    expect(result.model_type).toBe("gas_liquid");
     expect(result.system_type).toContain("Gas-liquid");
 
     expect(variableBySymbol.get("C_O2")).toMatchObject({
@@ -352,6 +575,24 @@ describe("RuleBasedProvider", () => {
     expect(units.get("qO2")).toBe("gO2/gX/h");
   });
 
+  it("classifies an Abiusi-like excerpt as oxygen-balanced mixotrophy", async () => {
+    const abiusiLikeExcerpt =
+      "An acetate-fed mixotrophic microalgae photobioreactor was operated as a continuous culture. " +
+      "The dilution rate D was set to 0.25 1/d and the working volume was 1.8 L. " +
+      "Dissolved oxygen (DO) was controlled at a setpoint by changing the oxygen balance while PFD and light exposure were reported. " +
+      "The text discusses autotrophic growth, heterotrophic acetate uptake, oxygen production and CO2 consumption, but kinetic constants and controller parameters were not specified.";
+
+    const { result, providerName } = await runExtraction(
+      abiusiLikeExcerpt,
+      "rule_based",
+    );
+
+    expect(providerName).toBe("rule_based");
+    expect(result.model_type).toBe("oxygen_balanced_mixotrophy");
+    expect(result.system_type).toContain("Oxygen-balanced");
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
+  });
+
   it("handles weak generic text gracefully", async () => {
     const source =
       "This paragraph discusses experiments qualitatively. No equations are reported and values are unknown. The setup was not specified in detail.";
@@ -359,10 +600,22 @@ describe("RuleBasedProvider", () => {
     const { result, providerName } = await runExtraction(source, "rule_based");
 
     expect(providerName).toBe("rule_based");
+    expect(result.model_type).toBe("unknown");
     expect(result.system_type).toBe("Generic ODE model");
     expect(result.equations).toHaveLength(0);
     expect(result.parameters).toHaveLength(0);
     expect(result.limitations.length).toBeGreaterThan(0);
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("classifies garbage input as unknown without crashing", async () => {
+    const source = "??? ### not a model ".repeat(20);
+
+    const { result, providerName } = await runExtraction(source, "rule_based");
+
+    expect(providerName).toBe("rule_based");
+    expect(result.model_type).toBe("unknown");
+    expect(result.equations).toHaveLength(0);
     expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
   });
 });
@@ -459,6 +712,13 @@ describe("JSON repair strategies — via ExtractionResultSchema", () => {
 
   it("missing required field (paper_title_or_topic) fails schema", () => {
     const { paper_title_or_topic: _, ...without } = valid;
+    void _;
+    const result = ExtractionResultSchema.safeParse(without);
+    expect(result.success).toBe(false);
+  });
+
+  it("missing required field (model_type) fails schema", () => {
+    const { model_type: _, ...without } = valid;
     void _;
     const result = ExtractionResultSchema.safeParse(without);
     expect(result.success).toBe(false);
