@@ -146,6 +146,33 @@ describe("runExtraction — input validation", () => {
     expect(result.paper_title_or_topic).toBeTruthy();
     expect(result.state_variables.length).toBeGreaterThan(0);
   });
+
+  it("auto provider falls back to mock when no OpenAI/Gemini keys exist", async () => {
+    delete process.env["OPENAI_API_KEY"];
+    delete process.env["GEMINI_API_KEY"];
+    const { providerName } = await runExtraction(SUFFICIENT_TEXT, "auto");
+    expect(providerName).toBe("mock");
+  });
+
+  it("returns clear provider error when OpenAI is selected without key", async () => {
+    delete process.env["OPENAI_API_KEY"];
+    await expect(runExtraction(SUFFICIENT_TEXT, "openai")).rejects.toMatchObject({
+      name: "ExtractionProviderError",
+      providerName: "openai",
+      status: 502,
+      message: expect.stringContaining("OPENAI_API_KEY"),
+    });
+  });
+
+  it("returns clear provider error when Gemini is selected without key", async () => {
+    delete process.env["GEMINI_API_KEY"];
+    await expect(runExtraction(SUFFICIENT_TEXT, "gemini")).rejects.toMatchObject({
+      name: "ExtractionProviderError",
+      providerName: "gemini",
+      status: 502,
+      message: expect.stringContaining("GEMINI_API_KEY"),
+    });
+  });
 });
 
 // ─── MockProvider output schema validity ─────────────────────────────────────
