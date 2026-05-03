@@ -8,6 +8,7 @@ import {
   getListProjectsQueryKey,
 } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
+import { features } from "@/lib/features";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,11 +47,12 @@ import {
   CheckCircle2,
   XCircle,
   FileSearch,
+  KeyRound,
 } from "lucide-react";
 
 // ─── Provider config ──────────────────────────────────────────────────────────
 
-type ProviderChoice = "auto" | "mock" | "openai" | "gemini";
+type ProviderChoice = "auto" | "mock" | "openai" | "gemini" | "ollama";
 
 const PROVIDER_OPTIONS: {
   value: ProviderChoice;
@@ -73,11 +75,19 @@ const PROVIDER_OPTIONS: {
     description: "Requires GEMINI_API_KEY",
   },
   {
+    value: "ollama",
+    label: "Ollama (local free)",
+    description: "Requires local Ollama server",
+  },
+  {
     value: "mock",
     label: "Mock (demo)",
     description: "Deterministic demo output — no API key needed",
   },
 ];
+const VISIBLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((opt) =>
+  features.realAI ? true : opt.value === "auto" || opt.value === "mock",
+);
 
 // ─── Demo source texts ────────────────────────────────────────────────────────
 
@@ -221,6 +231,21 @@ export default function NewExtraction() {
   const [activeTab, setActiveTab] = useState<"upload" | "paste">("paste");
   const [selectedProvider, setSelectedProvider] =
     useState<ProviderChoice>("auto");
+  const safeProvider: ProviderChoice = VISIBLE_PROVIDER_OPTIONS.some((o) => o.value === selectedProvider)
+    ? selectedProvider
+    : "auto";
+  const [openaiKey, setOpenaiKey] = useState(
+    () => localStorage.getItem("chemai_openai_key") ?? "",
+  );
+  const [geminiKey, setGeminiKey] = useState(
+    () => localStorage.getItem("chemai_gemini_key") ?? "",
+  );
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState(
+    () => localStorage.getItem("chemai_ollama_base_url") ?? "http://localhost:11434",
+  );
+  const [ollamaModel, setOllamaModel] = useState(
+    () => localStorage.getItem("chemai_ollama_model") ?? "llama3.1:8b",
+  );
 
   // ── Text file upload state ──────────────────────────────────────────────────
   const [uploadedFile, setUploadedFile] = useState<{
@@ -250,7 +275,10 @@ export default function NewExtraction() {
   const isRealProvider =
     selectedProvider === "openai" ||
     selectedProvider === "gemini" ||
+    selectedProvider === "ollama" ||
     selectedProvider === "auto";
+  const hasOpenAIKey = openaiKey.trim().length > 0;
+  const hasGeminiKey = geminiKey.trim().length > 0;
 
   // ── Derived source content ──────────────────────────────────────────────────
   function getSourceContent(): string {
@@ -398,6 +426,22 @@ export default function NewExtraction() {
         ).slice(0, 80);
 
     const projectName = title.trim() || fallbackTitle;
+    if (features.realAI && safeProvider === "openai" && !hasOpenAIKey) {
+      toast({
+        title: "OpenAI key missing",
+        description: "Add an OpenAI API key or choose Auto/Mock mode.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (features.realAI && safeProvider === "gemini" && !hasGeminiKey) {
+      toast({
+        title: "Gemini key missing",
+        description: "Add a Gemini API key or choose Auto/Mock mode.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
       const project = await createProject.mutateAsync({
@@ -414,11 +458,21 @@ export default function NewExtraction() {
           content: sourceContent,
         },
       });
-
-      await createExtraction.mutateAsync({
-        projectId: project.id,
-        data: { provider: selectedProvider },
+      const extractionRes = await fetch(`/api/projects/${project.id}/extractions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(features.realAI && openaiKey ? { "x-openai-api-key": openaiKey } : {}),
+          ...(features.realAI && geminiKey ? { "x-gemini-api-key": geminiKey } : {}),
+          ...(features.realAI && ollamaBaseUrl ? { "x-ollama-base-url": ollamaBaseUrl } : {}),
+          ...(features.realAI && ollamaModel ? { "x-ollama-model": ollamaModel } : {}),
+        },
+        body: JSON.stringify({ provider: safeProvider }),
       });
+      if (!extractionRes.ok) {
+        const data = (await extractionRes.json()) as { error?: string };
+        throw new Error(data.error ?? "Extraction failed");
+      }
 
       await queryClient.invalidateQueries({
         queryKey: getListProjectsQueryKey(),
@@ -457,6 +511,66 @@ export default function NewExtraction() {
           missing-information reports.
         </p>
       </div>
+
+      {features.realAI && <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <KeyRound className="h-4 w-4" />
+            Provider API Keys (browser local)
+          </CardTitle>
+          <CardDescription>
+            Stored only in your browser and sent as request headers for this extraction.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>OpenAI API Key</Label>
+            <Input
+              type="password"
+              value={openaiKey}
+              onChange={(e) => {
+                setOpenaiKey(e.target.value);
+                localStorage.setItem("chemai_openai_key", e.target.value);
+              }}
+              placeholder="sk-..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Gemini API Key</Label>
+            <Input
+              type="password"
+              value={geminiKey}
+              onChange={(e) => {
+                setGeminiKey(e.target.value);
+                localStorage.setItem("chemai_gemini_key", e.target.value);
+              }}
+              placeholder="AIza..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Ollama Base URL</Label>
+            <Input
+              value={ollamaBaseUrl}
+              onChange={(e) => {
+                setOllamaBaseUrl(e.target.value);
+                localStorage.setItem("chemai_ollama_base_url", e.target.value);
+              }}
+              placeholder="http://localhost:11434"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Ollama Model</Label>
+            <Input
+              value={ollamaModel}
+              onChange={(e) => {
+                setOllamaModel(e.target.value);
+                localStorage.setItem("chemai_ollama_model", e.target.value);
+              }}
+              placeholder="llama3.1:8b"
+            />
+          </div>
+        </CardContent>
+      </Card>}
 
       {/* ── Verification warning ── */}
       <div className="flex gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
@@ -536,17 +650,17 @@ export default function NewExtraction() {
                 }}
                 className="w-full"
               >
-                <TabsList className="grid w-full grid-cols-2 mb-6">
-                  <TabsTrigger value="upload" data-testid="tab-upload">
+                <TabsList className={`grid w-full ${features.pdfUpload ? "grid-cols-2" : "grid-cols-1"} mb-6`}>
+                  {features.pdfUpload && <TabsTrigger value="upload" data-testid="tab-upload">
                     Upload Document
-                  </TabsTrigger>
+                  </TabsTrigger>}
                   <TabsTrigger value="paste" data-testid="tab-paste">
                     Paste Text
                   </TabsTrigger>
                 </TabsList>
 
                 {/* ── Upload tab ── */}
-                <TabsContent value="upload" className="space-y-4">
+                {features.pdfUpload && <TabsContent value="upload" className="space-y-4">
 
                   {/* Dropzone */}
                   <div
@@ -697,7 +811,7 @@ export default function NewExtraction() {
                       content from a PDF viewer directly.
                     </p>
                   )}
-                </TabsContent>
+                </TabsContent>}
 
                 {/* ── Paste tab (unchanged) ── */}
                 <TabsContent value="paste">
@@ -746,7 +860,7 @@ export default function NewExtraction() {
                   AI Provider
                 </Label>
                 <Select
-                  value={selectedProvider}
+                  value={safeProvider}
                   onValueChange={(v) =>
                     setSelectedProvider(v as ProviderChoice)
                   }
@@ -759,8 +873,15 @@ export default function NewExtraction() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {PROVIDER_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
+                    {VISIBLE_PROVIDER_OPTIONS.map((opt) => (
+                      <SelectItem
+                        key={opt.value}
+                        value={opt.value}
+                        disabled={
+                          (opt.value === "openai" && !hasOpenAIKey) ||
+                          (opt.value === "gemini" && !hasGeminiKey)
+                        }
+                      >
                         <div className="flex flex-col py-0.5">
                           <span className="font-medium">{opt.label}</span>
                           <span className="text-xs text-muted-foreground">

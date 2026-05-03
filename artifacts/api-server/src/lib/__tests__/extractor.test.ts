@@ -4,6 +4,7 @@ import {
   runExtraction,
   mapExtractionToDb,
   ExtractionInputError,
+  ExtractionConfigError,
   ExtractionProviderError,
   MIN_SOURCE_CHARS,
 } from "../extractor";
@@ -107,11 +108,16 @@ describe("getActiveProvider", () => {
     expect(p.name).toBe("gemini");
   });
 
-  it("auto-falls back to mock when requested openai key is absent", () => {
+  it("throws when requested openai key is absent", () => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
-    const p = getActiveProvider("openai");
-    expect(p.name).toBe("mock");
+    expect(() => getActiveProvider("openai")).toThrow(ExtractionConfigError);
+  });
+
+  it("throws when requested gemini key is absent", () => {
+    delete process.env["OPENAI_API_KEY"];
+    delete process.env["GEMINI_API_KEY"];
+    expect(() => getActiveProvider("gemini")).toThrow(ExtractionConfigError);
   });
 
   it("auto-prefers openai over gemini when both keys present", () => {
@@ -145,6 +151,13 @@ describe("runExtraction — input validation", () => {
     expect(providerName).toBe("mock");
     expect(result.paper_title_or_topic).toBeTruthy();
     expect(result.state_variables.length).toBeGreaterThan(0);
+  });
+
+  it("returns helpful config error for unavailable preferred provider", async () => {
+    delete process.env["OPENAI_API_KEY"];
+    await expect(runExtraction(SUFFICIENT_TEXT, "openai")).rejects.toBeInstanceOf(
+      ExtractionConfigError,
+    );
   });
 });
 

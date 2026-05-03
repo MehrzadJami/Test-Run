@@ -11,6 +11,8 @@ import {
 import { useAuth } from "@workspace/replit-auth-web";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
@@ -58,6 +60,9 @@ import {
   type FormalEqResult,
 } from "@/lib/dimensional-analysis";
 import { generatePythonOdeTemplate } from "@/lib/python-generator";
+import { generateJupyterNotebook } from "@/lib/notebook-generator";
+import { buildAggregatedModelCard, detectConflicts } from "@/lib/multi-source";
+import { features } from "@/lib/features";
 import { matchTemplates, type TemplateScanResult, type RunnableTemplateStatus } from "@/lib/template-matcher";
 import { generateModelPackage } from "@/lib/package-generator";
 import { VariablesTab } from "@/components/model-card/VariablesTab";
@@ -134,6 +139,30 @@ type RawExtraction = {
   assumptions?: RawAssumption[];
   limitations?: RawLimitation[];
   model_card?: RawModelCard;
+};
+
+type ReviewStatus =
+  | "extracted"
+  | "needs_review"
+  | "reviewed"
+  | "verified"
+  | "rejected";
+
+type LocalReviewData = {
+  status: ReviewStatus;
+  reviewer_name?: string;
+  review_notes: string;
+  reviewed_at?: string;
+  verification_status?: string;
+  issues_found: string[];
+  checklist: {
+    equations_checked: boolean;
+    units_checked: boolean;
+    parameters_checked: boolean;
+    initial_conditions_checked: boolean;
+    assumptions_checked: boolean;
+    code_scaffold_checked: boolean;
+  };
 };
 
 // ─── Small shared display components ─────────────────────────────────────────
@@ -500,6 +529,23 @@ function ModelCardDetailInner({
 
   // ── Model Package download (M9) ─────────────────────────────────────────
   const [downloading, setDownloading] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [reviewData, setReviewData] = useState<LocalReviewData>(() =>
+    loadLocalReview(projectId),
+  );
+  const projectExtractions = ((project as any)?.extractions ?? []) as any[];
+  const filteredExtractions =
+    sourceFilter === "all"
+      ? projectExtractions
+      : projectExtractions.filter((e) => String(e.id) === sourceFilter);
+  const aggregated = useMemo(
+    () => buildAggregatedModelCard(filteredExtractions),
+    [filteredExtractions],
+  );
+  const conflicts = useMemo(
+    () => detectConflicts(filteredExtractions),
+    [filteredExtractions],
+  );
 
   async function handleDownloadPackage() {
     setDownloading(true);
@@ -521,6 +567,7 @@ function ModelCardDetailInner({
         report,
         unitReport,
         pythonCode,
+        review: reviewData,
       });
 
       const JSZip = (await import("jszip")).default;
@@ -578,6 +625,9 @@ function ModelCardDetailInner({
             className="text-[10px] uppercase"
           >
             {extraction.status}
+          </Badge>
+          <Badge variant="outline" className="text-[10px] uppercase border-blue-400 text-blue-700">
+            Review: {reviewData.status.replace("_", " ")}
           </Badge>
           {/* Reproducibility score badge in header */}
           <Badge
@@ -700,7 +750,7 @@ function ModelCardDetailInner({
                 </Button>
               </Link>
             )}
-            <Button
+            {features.notebookExport && <Button
               variant="outline"
               onClick={() => { void handleDownloadPackage(); }}
               disabled={downloading}
@@ -710,6 +760,34 @@ function ModelCardDetailInner({
                 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 : <Package className="h-4 w-4 mr-2" />}
               {downloading ? "Building…" : "Download Package"}
+            </Button>}
+            <Button
+              variant="outline"
+              onClick={() =>
+                downloadTextFile(
+                  generateJupyterNotebook({
+                    title: extraction.modelCardTitle,
+                    projectName: project?.name ?? "Unknown project",
+                    providerUsed: extraction.providerUsed,
+                    systemType: raw?.system_type ?? extraction.domain,
+                    systemDescription: extraction.systemDescription,
+                    equations,
+                    variables,
+                    parameters,
+                    assumptions: [...assumptionItems, ...limitationItems],
+                    raw: raw ?? null,
+                    report,
+                    unitReport,
+                    pythonCode,
+                  }),
+                  "model_notebook.ipynb",
+                  "application/x-ipynb+json",
+                )
+              }
+              data-testid="btn-download-notebook"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download Jupyter Notebook
             </Button>
             <a
               href={`${import.meta.env.BASE_URL}api/projects/${projectId}/export`}
@@ -763,9 +841,21 @@ function ModelCardDetailInner({
           <TabsTrigger value="domain-checklist" data-testid="tab-domain-checklist">
             Domain Checklist
           </TabsTrigger>
-          <TabsTrigger value="audit" data-testid="tab-audit">
+          {features.auditTrail && <TabsTrigger value="audit" data-testid="tab-audit">
             Audit Trail
+          </TabsTrigger>}
+          <TabsTrigger value="review" data-testid="tab-review">
+            Review
           </TabsTrigger>
+          {features.multisource && <TabsTrigger value="sources" data-testid="tab-sources">
+            Sources
+          </TabsTrigger>}
+          {features.multisource && <TabsTrigger value="aggregated" data-testid="tab-aggregated">
+            Aggregated
+          </TabsTrigger>}
+          {features.multisource && <TabsTrigger value="conflicts" data-testid="tab-conflicts">
+            Conflicts
+          </TabsTrigger>}
           <TabsTrigger value="raw" data-testid="tab-raw">
             Raw JSON
           </TabsTrigger>
@@ -847,7 +937,7 @@ function ModelCardDetailInner({
         </TabsContent>
 
         {/* ── Variables (inline editing) ── */}
-        <TabsContent value="variables" className="mt-6">
+        {features.inlineEditing && <TabsContent value="variables" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>State &amp; Input Variables</CardTitle>
@@ -862,10 +952,10 @@ function ModelCardDetailInner({
               />
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
 
         {/* ── Parameters (inline editing) ── */}
-        <TabsContent value="parameters" className="mt-6">
+        {features.inlineEditing && <TabsContent value="parameters" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>Model Parameters</CardTitle>
@@ -880,10 +970,10 @@ function ModelCardDetailInner({
               />
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
 
         {/* ── Equations (inline editing) ── */}
-        <TabsContent value="equations" className="mt-6">
+        {features.inlineEditing && <TabsContent value="equations" className="mt-6">
           <Card>
             <CardHeader>
               <CardTitle>Governing Equations</CardTitle>
@@ -898,16 +988,16 @@ function ModelCardDetailInner({
               />
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
 
         {/* ── Assumptions (inline editing) ── */}
-        <TabsContent value="assumptions" className="mt-6 space-y-6">
+        {features.inlineEditing && <TabsContent value="assumptions" className="mt-6 space-y-6">
           <AssumptionsTab
             projectId={projectId}
             assumptionItems={assumptionItems as Parameters<typeof AssumptionsTab>[0]["assumptionItems"]}
             limitationItems={limitationItems as Parameters<typeof AssumptionsTab>[0]["limitationItems"]}
           />
-        </TabsContent>
+        </TabsContent>}
 
         {/* ── Missing Info (from model card) ── */}
         <TabsContent value="missing" className="mt-6">
@@ -1680,9 +1770,185 @@ function ModelCardDetailInner({
         </TabsContent>
 
         {/* ── Audit Trail (M17) ── */}
-        <TabsContent value="audit" className="mt-6">
+        {features.auditTrail && <TabsContent value="audit" className="mt-6">
           <AuditTrailTab extraction={extraction} />
+        </TabsContent>}
+
+        <TabsContent value="review" className="mt-6 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Model Review Workflow (M26)</CardTitle>
+              <CardDescription>
+                Verified means manually checked by the user against the provided source, not experimentally validated.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Input
+                placeholder="Reviewer name (optional)"
+                value={reviewData.reviewer_name ?? ""}
+                onChange={(e) =>
+                  setAndPersistReview(projectId, setReviewData, {
+                    ...reviewData,
+                    reviewer_name: e.target.value,
+                  })
+                }
+              />
+              <Textarea
+                placeholder="Review notes"
+                value={reviewData.review_notes}
+                onChange={(e) =>
+                  setAndPersistReview(projectId, setReviewData, {
+                    ...reviewData,
+                    review_notes: e.target.value,
+                  })
+                }
+              />
+              <div className="grid md:grid-cols-2 gap-2 text-sm">
+                {(
+                  [
+                    ["equations_checked", "Equations checked against source"],
+                    ["units_checked", "Units checked"],
+                    ["parameters_checked", "Parameters checked"],
+                    ["initial_conditions_checked", "Initial conditions checked"],
+                    ["assumptions_checked", "Assumptions checked"],
+                    ["code_scaffold_checked", "Code scaffold checked"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={reviewData.checklist[key]}
+                      onChange={(e) =>
+                        setAndPersistReview(projectId, setReviewData, {
+                          ...reviewData,
+                          checklist: { ...reviewData.checklist, [key]: e.target.checked },
+                        })
+                      }
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    setAndPersistReview(projectId, setReviewData, {
+                      ...reviewData,
+                      status: "needs_review",
+                      reviewed_at: new Date().toISOString(),
+                    })
+                  }
+                >
+                  Mark as Needs Review
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    setAndPersistReview(projectId, setReviewData, {
+                      ...reviewData,
+                      status: "reviewed",
+                      reviewed_at: new Date().toISOString(),
+                    })
+                  }
+                >
+                  Mark as Reviewed
+                </Button>
+                <Button
+                  onClick={() =>
+                    setAndPersistReview(projectId, setReviewData, {
+                      ...reviewData,
+                      status: "verified",
+                      verification_status:
+                        "Verified means manually checked by the user against the provided source, not experimentally validated.",
+                      reviewed_at: new Date().toISOString(),
+                    })
+                  }
+                >
+                  Mark as Verified
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
+
+        {features.multisource && <TabsContent value="sources" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Project Sources</CardTitle>
+              <CardDescription>All source documents and extraction history for this project.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                {(((project as any)?.sourceDocuments ?? []) as any[]).map((s) => (
+                  <div key={s.id} className="rounded border p-3 text-sm">
+                    <div><strong>{s.filename || `Source ${s.id}`}</strong> · {s.kind}</div>
+                    <div className="text-muted-foreground">
+                      {new Date(s.createdAt).toLocaleString()} · {String(s.content ?? "").length} chars
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Extractions</p>
+                {projectExtractions.map((e) => (
+                  <div key={e.id} className="rounded border p-3 text-sm flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-medium">{e.modelCardTitle || `Extraction ${e.id}`}</div>
+                      <div className="text-muted-foreground">{e.providerUsed} · {e.status} · {new Date(e.createdAt).toLocaleString()}</div>
+                    </div>
+                    <Link href={`/model-cards/${e.projectId}`}>
+                      <Button variant="outline" size="sm">Open model card</Button>
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>}
+
+        {features.multisource && <TabsContent value="aggregated" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Aggregated Model Card</CardTitle>
+              <CardDescription>Merged across selected extractions in this project.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <select className="border rounded px-2 py-1 text-sm" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+                <option value="all">All extractions</option>
+                {projectExtractions.map((e) => (
+                  <option key={e.id} value={String(e.id)}>{e.modelCardTitle || `Extraction ${e.id}`}</option>
+                ))}
+              </select>
+              <div className="text-sm">Variables merged: {aggregated.variables.length}</div>
+              <div className="text-sm">Parameters merged: {aggregated.parameters.length}</div>
+              <div className="text-sm">Equations merged: {aggregated.equations.length}</div>
+            </CardContent>
+          </Card>
+        </TabsContent>}
+
+        {features.multisource && <TabsContent value="conflicts" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Conflict Detection</CardTitle>
+              <CardDescription>Symbol/unit/value-based conflicts across selected sources.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {conflicts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No conflicts detected.</p>
+              ) : (
+                conflicts.map((c, i) => (
+                  <div key={`${c.type}-${c.symbol_or_label}-${i}`} className="rounded border p-3 text-sm">
+                    <div className="font-medium">{c.type} · {c.symbol_or_label} · {c.severity}</div>
+                    <div>{c.details}</div>
+                    <div className="text-muted-foreground">Sources: {c.sources.join(", ")}</div>
+                    <div className="text-muted-foreground">Recommendation: {c.recommendation}</div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>}
 
         {/* ── Raw JSON ── */}
         <TabsContent value="raw" className="mt-6">
@@ -1717,9 +1983,53 @@ function ModelCardDetailInner({
   );
 }
 
+function reviewStorageKey(projectId: string | number): string {
+  return `chemai_review_${projectId}`;
+}
+
+function defaultReview(): LocalReviewData {
+  return {
+    status: "extracted",
+    review_notes: "",
+    verification_status: "",
+    issues_found: [],
+    checklist: {
+      equations_checked: false,
+      units_checked: false,
+      parameters_checked: false,
+      initial_conditions_checked: false,
+      assumptions_checked: false,
+      code_scaffold_checked: false,
+    },
+  };
+}
+
+function loadLocalReview(projectId: string | number): LocalReviewData {
+  try {
+    const raw = localStorage.getItem(reviewStorageKey(projectId));
+    if (!raw) return defaultReview();
+    return { ...defaultReview(), ...JSON.parse(raw) } as LocalReviewData;
+  } catch {
+    return defaultReview();
+  }
+}
+
+function setAndPersistReview(
+  projectId: string | number,
+  setState: (next: LocalReviewData) => void,
+  next: LocalReviewData,
+): void {
+  const issues = Object.entries(next.checklist)
+    .filter(([, v]) => !v)
+    .map(([k]) => k.replaceAll("_", " "));
+  const withIssues = { ...next, issues_found: issues };
+  setState(withIssues);
+  localStorage.setItem(reviewStorageKey(projectId), JSON.stringify(withIssues));
+}
+
 /** Trigger a browser download of a text file. */
-function downloadTextFile(content: string, filename: string): void {
-  const blob = new Blob([content], { type: "text/x-python" });
+function downloadTextFile(content: string, filename: string, mimeType = "text/plain"): void {
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
