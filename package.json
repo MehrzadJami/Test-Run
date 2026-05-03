@@ -4,10 +4,18 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+    "dev": "pnpm --parallel --filter @workspace/api-server --filter @workspace/chem-ai run dev",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "benchmark": "pnpm --filter @workspace/benchmark run benchmark"
+    "benchmark": "pnpm --filter @workspace/benchmark run benchmark",
+    "db:push": "pnpm --filter @workspace/db run push",
+    "db:migrate": "pnpm --filter @workspace/db run migrate",
+    "db:seed": "pnpm --filter @workspace/db run seed",
+    "test:unit": "pnpm --filter @workspace/domain-classifier run test && pnpm --filter @workspace/chem-ai run test && pnpm --filter @workspace/api-server run test:unit",
+    "test:api": "pnpm --filter @workspace/api-server run test:api",
+    "test": "pnpm run test:unit",
+    "ci": "pnpm run typecheck && pnpm run test:unit && pnpm run test:api && pnpm run build"
   },
   "private": true,
   "devDependencies": {

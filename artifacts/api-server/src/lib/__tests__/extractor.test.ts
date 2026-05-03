@@ -4,6 +4,7 @@ import {
   runExtraction,
   mapExtractionToDb,
   ExtractionInputError,
+  ExtractionConfigError,
   ExtractionProviderError,
   MIN_SOURCE_CHARS,
 } from "../extractor";
@@ -107,11 +108,10 @@ describe("getActiveProvider", () => {
     expect(p.name).toBe("gemini");
   });
 
-  it("auto-falls back to mock when requested openai key is absent", () => {
+  it("throws when requested openai key is absent", () => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
-    const p = getActiveProvider("openai");
-    expect(p.name).toBe("mock");
+    expect(() => getActiveProvider("openai")).toThrow(ExtractionConfigError);
   });
 
   it("auto-prefers openai over gemini when both keys present", () => {

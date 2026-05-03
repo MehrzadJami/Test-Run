@@ -15,6 +15,8 @@ import Simulation from "@/pages/simulation";
 import ExperimentalData from "@/pages/experimental-data";
 import Exports from "@/pages/exports";
 import ShareModelCard from "@/pages/share-model-card";
+import FeatureDisabled from "@/pages/feature-disabled";
+import { features } from "@/lib/features";
 
 const queryClient = new QueryClient();
 
@@ -33,7 +35,16 @@ function AppRouter() {
             <Route path="/model-cards" component={ModelCardsIndex} />
             <Route path="/model-cards/:id" component={ModelCardDetail} />
             <Route path="/simulation" component={Simulation} />
-            <Route path="/experimental-data" component={ExperimentalData} />
+            <Route
+              path="/experimental-data"
+              component={() =>
+                features.experimentalFitting ? (
+                  <ExperimentalData />
+                ) : (
+                  <FeatureDisabled name="Experimental Data Fitting" />
+                )
+              }
+            />
             <Route path="/exports" component={Exports} />
             <Route component={NotFound} />
           </Switch>

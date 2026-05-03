@@ -109,7 +109,8 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Download simulation output as CSV
 
 **Exports**
-- Model Package ZIP (14 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `requirements.txt`, `source_excerpt.txt`
+- Model Package ZIP (15 files): `README.md`, `model_card.md`, `equations.md`, `variables.csv`, `parameters.csv`, `assumptions.md`, `limitations.md`, `missing_information.md`, `reproducibility_report.json`, `unit_check_report.json`, `raw_extraction.json`, `simulate.py`, `model_notebook.ipynb`, `requirements.txt`, `source_excerpt.txt`
+- Jupyter Notebook export (`model_notebook.ipynb`) from each model card, including summary, tables, equations, missing info, reproducibility/unit checks, and simulation scaffold cells
 - Python ODE template (`simulate.py`): parameters pre-filled, equation bodies marked TODO, readiness banners included
 - Simulation CSV: time-series (t, X, S) from the browser RK4 solver
 
@@ -126,6 +127,24 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 - Pino structured logging (JSON) on the API server
 - pnpm monorepo with `@workspace/*` shared libraries
 - 11 transitive dependency vulnerabilities patched via `pnpm-workspace.yaml` overrides (picomatch, path-to-regexp, lodash, brace-expansion, yaml, postcss)
+
+---
+
+## 5.1 Current Gaps & Bug-Hunt Priorities (May 2026)
+
+This project has moved fast and currently has several areas that need a dedicated stability sprint:
+
+- **PDF extraction quality variability** on some non-scanned PDFs (parser output can still be low-quality depending on document structure).
+- **Simulation trustworthiness** is still constrained by model compatibility; some flows fall back to demo assumptions.
+- **Provider UX consistency** (runtime keys/providers added incrementally; needs a unified settings/diagnostics experience).
+- **Documentation drift risk** after rapid milestone shipping (feature counts, route tables, and behavior notes can desync).
+- **Multi-source aggregation robustness** requires deeper fixture coverage and conflict-resolution UX.
+
+Planned remediation is tracked in `kanban.md` under:
+- **M27 Stability & Bug-Hunt Hardening**
+- **M28 OCR & Document Ingestion Quality**
+- **M29 Simulation Reliability Upgrade**
+- **M30 Provider UX & Security Hardening**
 
 ---
 
@@ -171,39 +190,47 @@ No API key is required for the demo. Without API keys, extractions use MockProvi
 
 ---
 
-## 8. Local Setup
+## 8. Setup Modes
+
+### Local mode (outside Replit)
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/MehrzadJami/Test-Run
+git clone https://github.com/MehrzadJami/Test-Run.git
 cd Test-Run
-# Note: the repository can later be renamed to chemai-model-compiler
-
-# 2. Install dependencies (requires Node 20+ and pnpm 9+)
 pnpm install
-
-# 3. Configure environment variables
 cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL
-
-# 4. Run database migrations
-pnpm --filter @workspace/db run migrate
-
-# 5. (Optional) Seed the demo model
-pnpm --filter @workspace/db run seed
-
-# 6. Start the API server
-pnpm --filter @workspace/api-server run dev
-
-# 7. Start the frontend (separate terminal)
-pnpm --filter @workspace/chem-ai run dev
+docker compose up -d
+pnpm db:push
+pnpm db:seed
+pnpm dev
 ```
 
-The frontend is served at `http://localhost:<PORT>/` and the API at `http://localhost:<PORT>/api`.
+Local defaults:
+- API: `http://localhost:8080`
+- Frontend: `http://localhost:5173`
+- Frontend `/api` requests are proxied to the API via Vite (`VITE_API_PROXY_TARGET`).
 
-See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for detailed Replit setup, port configuration, and troubleshooting.
+### Replit mode
 
----
+Use Replit workflows and Replit-provided environment variables.
+Replit handles preview/proxy routing; local Docker Compose is not required.
+
+See `docs/LOCAL_SETUP.md` for full troubleshooting and command reference.
+
+
+### Feature flags (stable public defaults)
+
+Public/demo defaults are tuned for stability:
+- Enabled: `INLINE_EDITING`, `AUDIT_TRAIL`, `PDF_UPLOAD`, `NOTEBOOK_EXPORT`
+- Hidden by default: `AUTH`, `MULTISOURCE`, `REAL_AI`, `EXPERIMENTAL_FITTING`
+
+Set these in `.env` (frontend flags use `VITE_` prefix):
+`VITE_FEATURE_AUTH`, `VITE_FEATURE_MULTISOURCE`, `VITE_FEATURE_INLINE_EDITING`,
+`VITE_FEATURE_AUDIT_TRAIL`, `VITE_FEATURE_PDF_UPLOAD`, `VITE_FEATURE_NOTEBOOK_EXPORT`,
+`VITE_FEATURE_REAL_AI`, `VITE_FEATURE_EXPERIMENTAL_FITTING`.
+
+Disabled features are hidden from navigation/buttons, and direct routes show a
+"Feature not enabled" page.
 
 ## 9. Environment Variables
 

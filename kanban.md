@@ -215,25 +215,63 @@
 
 ## ⚡ Planned
 
+### M27 — Stability & Bug-Hunt Hardening Sprint (NEW)
+- End-to-end audit of extraction correctness, simulation correctness, and export consistency
+- Add a reproducible “Known Failures” matrix with fixtures and expected behavior
+- Add strict acceptance checks before release:
+  - PDF parsing quality thresholds (chars/page, diagnostics)
+  - Provider routing sanity (mock/openai/gemini/ollama)
+  - Simulation mode correctness (demo vs model-derived)
+  - Package content consistency (README count == actual files)
+- Add “truthfulness guardrails” in UI for scaffold-only models (no implied validation)
+- Add regression tests for:
+  - runtime key wiring headers
+  - provider fallback chain
+  - data-url PDF payloads + low-text warnings + fallback mode
+  - multi-source conflict object schema stability
+
+### M28 — OCR & Document Ingestion Quality (NEW)
+- Integrate optional OCR provider for scanned/low-text PDFs (config-gated)
+- Add parser strategy fallback ranking and confidence score
+- Return richer diagnostics:
+  - text density by page
+  - extraction strategy used
+  - warnings + recommended user action
+- Add side-by-side “raw extracted text preview vs source metadata” in UI
+
+### M29 — Simulation Reliability Upgrade (NEW)
+- Move simulation from fixed chemostat assumptions to model-aware execution profiles
+- Auto-detect runnable template status and block misleading runs when unresolved TODOs exist
+- Add explicit “Demo Mode” vs “Model Mode” badges + provenance in downloaded CSV
+- Add validation layer for symbol mapping (X, S, D, Ks, μmax, Yxs aliases)
+- Add test fixtures where simulation inputs must differ across models
+
+### M30 — Provider UX & Security Hardening (NEW)
+- Central settings panel for provider credentials + local encryption-at-rest option
+- Add connectivity test button per provider (OpenAI/Gemini/Ollama)
+- Add per-request key masking/sanitization in logs
+- Add explicit provider failure diagnostics in extraction UI (auth/network/schema)
+- Add “free/local-only mode” preset that prioritizes Ollama→Mock
+
 ### M16 — Authentication
 - Replit Auth (OpenID Connect + PKCE) or Clerk
 - Per-user project isolation — users only see their own projects
 - Public / private model card visibility toggle
 - `SESSION_SECRET` env var already reserved in `.env.example`
 
-### M17 — Multi-source Projects
+### M17 — Multi-source Projects (partially shipped; stabilization pending)
 - Attach multiple source documents to one project
 - Aggregate model card across all sources
 - Conflict detection: same parameter, different values across sources — flag with source attribution
 - `POST /api/projects/:id/sources` already exists; aggregation logic is the new work
 
-### M18 — Inline Editing
+### M18 — Inline Editing (shipped; needs regression pass after M26/M27)
 - Edit variable symbol, unit, role inline in the Variables tab
 - Edit parameter symbol, value, unit inline in the Parameters tab
 - Optimistic UI updates + `PATCH /api/variables/:id` and `PATCH /api/parameters/:id` routes
 - Undo/redo stack (client-side)
 
-### M19 — Unit Check v2 (Rigorous Dimensional Analysis)
+### M19 — Unit Check v2 (Rigorous Dimensional Analysis, partially shipped)
 - Replace heuristic checks with formal dimensional algebra
 - Each equation term gets explicit unit decomposition
 - Report failures by equation and term, not just heuristic patterns

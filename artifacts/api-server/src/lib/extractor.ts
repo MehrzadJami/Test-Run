@@ -43,6 +43,7 @@ import {
 } from "./extraction-schema";
 import { OpenAIProvider } from "./providers/openai-provider";
 import { GeminiProvider } from "./providers/gemini-provider";
+import { OllamaProvider } from "./providers/ollama-provider";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./providers/prompt";
 import { logger } from "./logger";
 
@@ -68,10 +69,18 @@ export class ExtractionProviderError extends Error {
     this.name = "ExtractionProviderError";
   }
 }
+/** Provider is explicitly requested but not configured/reachable. 400 territory. */
+export class ExtractionConfigError extends Error {
+  readonly status = 400 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "ExtractionConfigError";
+  }
+}
 
 // ---------- Provider interface ----------
 
-export type ProviderName = "mock" | "openai" | "gemini";
+export type ProviderName = "mock" | "openai" | "gemini" | "ollama";
 export type ProviderPreference = ProviderName | "auto";
 
 export interface ExtractionProvider {
@@ -281,23 +290,50 @@ function tryRepairJson(raw: unknown): unknown {
  */
 export function getActiveProvider(
   preferred?: ProviderPreference,
+  runtimeKeys?: {
+    openaiApiKey?: string;
+    geminiApiKey?: string;
+    ollamaBaseUrl?: string;
+    ollamaModel?: string;
+  },
 ): ExtractionProvider {
-  const hasOpenAI = !!process.env["OPENAI_API_KEY"];
-  const hasGemini = !!process.env["GEMINI_API_KEY"];
+  const hasOpenAI = !!(runtimeKeys?.openaiApiKey || process.env["OPENAI_API_KEY"]);
+  const hasGemini = !!(runtimeKeys?.geminiApiKey || process.env["GEMINI_API_KEY"]);
+  const hasOllama = !!(runtimeKeys?.ollamaBaseUrl || process.env["OLLAMA_BASE_URL"]);
 
   if (preferred === "mock") {
     return new MockProvider();
   }
   if (preferred === "openai" && hasOpenAI) {
-    return new OpenAIProvider();
+    return new OpenAIProvider("gpt-4o", runtimeKeys?.openaiApiKey);
+  }
+  if (preferred === "openai" && !hasOpenAI) {
+    throw new ExtractionConfigError(
+      "OpenAI provider selected, but OPENAI_API_KEY is not configured.",
+    );
   }
   if (preferred === "gemini" && hasGemini) {
-    return new GeminiProvider();
+    return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
+  }
+  if (preferred === "gemini" && !hasGemini) {
+    throw new ExtractionConfigError(
+      "Gemini provider selected, but GEMINI_API_KEY is not configured.",
+    );
+  }
+  if (preferred === "ollama" && hasOllama) {
+    return new OllamaProvider(runtimeKeys?.ollamaBaseUrl, runtimeKeys?.ollamaModel);
+  }
+  if (preferred === "ollama" && !hasOllama) {
+    throw new ExtractionConfigError(
+      "Ollama provider selected, but OLLAMA_BASE_URL is not configured.",
+    );
   }
 
   // Auto fallback chain (also used when preferred key is not configured)
-  if (hasOpenAI) return new OpenAIProvider();
-  if (hasGemini) return new GeminiProvider();
+  if (hasOpenAI) return new OpenAIProvider("gpt-4o", runtimeKeys?.openaiApiKey);
+  if (hasGemini)
+    return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
+  if (hasOllama) return new OllamaProvider(runtimeKeys?.ollamaBaseUrl, runtimeKeys?.ollamaModel);
   return new MockProvider();
 }
 
@@ -308,6 +344,12 @@ export const MIN_SOURCE_CHARS = 30;
 export async function runExtraction(
   sourceText: string,
   preferred?: ProviderPreference,
+  runtimeKeys?: {
+    openaiApiKey?: string;
+    geminiApiKey?: string;
+    ollamaBaseUrl?: string;
+    ollamaModel?: string;
+  },
 ): Promise<{
   result: ExtractionResult;
   providerName: ProviderName;
@@ -323,7 +365,7 @@ export async function runExtraction(
     );
   }
 
-  const provider = getActiveProvider(preferred);
+  const provider = getActiveProvider(preferred, runtimeKeys);
 
   // Call the provider, catching any thrown error.
   let providerOutput: unknown;
@@ -426,6 +468,62 @@ export async function runExtraction(
   };
 
   return { result: parsed.data, providerName: provider.name, audit };
+}
+
+export async function getProvidersStatus(): Promise<{
+  providers: Record<string, { available: boolean; reason: string }>;
+  defaultProvider: ProviderName;
+  autoOrder: ProviderName[];
+}> {
+  const openai = !!process.env["OPENAI_API_KEY"];
+  const gemini = !!process.env["GEMINI_API_KEY"];
+  const base = process.env["OLLAMA_BASE_URL"];
+  let ollamaReachable = false;
+  if (base) {
+    try {
+      const res = await fetch(`${base.replace(/\/$/, "")}/api/tags`, {
+        method: "GET",
+      });
+      ollamaReachable = res.ok;
+    } catch {
+      ollamaReachable = false;
+    }
+  }
+  const providers = {
+    mock: { available: true, reason: "Always available" },
+    openai: {
+      available: openai,
+      reason: openai
+        ? "OPENAI_API_KEY is configured"
+        : "OPENAI_API_KEY is not configured",
+    },
+    gemini: {
+      available: gemini,
+      reason: gemini
+        ? "GEMINI_API_KEY is configured"
+        : "GEMINI_API_KEY is not configured",
+    },
+    ollama: {
+      available: !!base && ollamaReachable,
+      reason: !base
+        ? "OLLAMA_BASE_URL is not configured"
+        : ollamaReachable
+        ? "OLLAMA_BASE_URL is reachable"
+        : "OLLAMA_BASE_URL is not reachable or not configured",
+    },
+  };
+  const defaultProvider: ProviderName = openai
+    ? "openai"
+    : gemini
+    ? "gemini"
+    : providers.ollama.available
+    ? "ollama"
+    : "mock";
+  return {
+    providers,
+    defaultProvider,
+    autoOrder: ["openai", "gemini", "ollama", "mock"],
+  };
 }
 
 // ---------- DB mapping ----------

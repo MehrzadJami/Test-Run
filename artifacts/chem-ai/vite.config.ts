@@ -4,36 +4,14 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
-// PORT is only required for the dev server (vite dev / vite preview).
-// Production builds (vite build) write static files and don't need a port.
-const isBuild = process.env.VITE_COMMAND === "build" ||
-  process.argv.includes("build");
-
-const rawPort = process.env.PORT;
-let port = 5173; // safe default for build mode
-
-if (!isBuild) {
-  if (!rawPort) {
-    throw new Error(
-      "PORT environment variable is required but was not provided.",
-    );
-  }
-  const parsed = Number(rawPort);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    throw new Error(`Invalid PORT value: "${rawPort}"`);
-  }
-  port = parsed;
-} else if (rawPort) {
-  port = Number(rawPort) || 5173;
+const rawPort = process.env.PORT ?? "5173";
+const parsedPort = Number(rawPort);
+if (Number.isNaN(parsedPort) || parsedPort <= 0) {
+  throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
+const port = parsedPort;
 
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    "BASE_PATH environment variable is required but was not provided.",
-  );
-}
+const basePath = process.env.BASE_PATH ?? "/";
 
 export default defineConfig({
   base: basePath,
@@ -74,6 +52,9 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+    },
+    proxy: {
+      "/api": process.env.VITE_API_PROXY_TARGET ?? "http://localhost:8080",
     },
   },
   preview: {

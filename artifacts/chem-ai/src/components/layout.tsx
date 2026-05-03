@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { useState } from "react";
+import { features } from "@/lib/features";
 
 export function Sidebar() {
   const [location] = useLocation();
@@ -35,9 +36,11 @@ export function Sidebar() {
     { href: "/new", label: "New Extraction", icon: PlusCircle },
     { href: "/model-cards", label: "Model Cards", icon: Library },
     { href: "/simulation", label: "Simulation", icon: ActivitySquare },
-    { href: "/experimental-data", label: "Exp. Data Fitting", icon: FlaskConical },
     { href: "/exports", label: "Exports", icon: DownloadCloud },
   ];
+  if (features.experimentalFitting) {
+    navItems.splice(4, 0, { href: "/experimental-data", label: "Exp. Data Fitting", icon: FlaskConical });
+  }
 
   const displayName =
     user?.firstName
@@ -132,7 +135,7 @@ export function Sidebar() {
           </Button>
 
           {/* Auth section */}
-          {!isLoading && (
+          {features.auth && !isLoading && (
             isAuthenticated && user ? (
               <div className="flex items-center gap-2">
                 <div className="flex items-center justify-center w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-semibold shrink-0">
@@ -166,7 +169,7 @@ export function Sidebar() {
             )
           )}
 
-          {isLoading && (
+          {features.auth && isLoading && (
             <div className="flex items-center gap-2 px-3 py-1.5">
               <User className="w-4 h-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Loading…</span>
