@@ -46,11 +46,12 @@ import {
   CheckCircle2,
   XCircle,
   FileSearch,
+  KeyRound,
 } from "lucide-react";
 
 // ─── Provider config ──────────────────────────────────────────────────────────
 
-type ProviderChoice = "auto" | "mock" | "openai" | "gemini";
+type ProviderChoice = "auto" | "mock" | "openai" | "gemini" | "ollama";
 
 const PROVIDER_OPTIONS: {
   value: ProviderChoice;
@@ -71,6 +72,11 @@ const PROVIDER_OPTIONS: {
     value: "gemini",
     label: "Gemini 1.5 Flash",
     description: "Requires GEMINI_API_KEY",
+  },
+  {
+    value: "ollama",
+    label: "Ollama (local free)",
+    description: "Requires local Ollama server",
   },
   {
     value: "mock",
@@ -221,6 +227,18 @@ export default function NewExtraction() {
   const [activeTab, setActiveTab] = useState<"upload" | "paste">("paste");
   const [selectedProvider, setSelectedProvider] =
     useState<ProviderChoice>("auto");
+  const [openaiKey, setOpenaiKey] = useState(
+    () => localStorage.getItem("chemai_openai_key") ?? "",
+  );
+  const [geminiKey, setGeminiKey] = useState(
+    () => localStorage.getItem("chemai_gemini_key") ?? "",
+  );
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState(
+    () => localStorage.getItem("chemai_ollama_base_url") ?? "http://localhost:11434",
+  );
+  const [ollamaModel, setOllamaModel] = useState(
+    () => localStorage.getItem("chemai_ollama_model") ?? "llama3.1:8b",
+  );
 
   // ── Text file upload state ──────────────────────────────────────────────────
   const [uploadedFile, setUploadedFile] = useState<{
@@ -250,6 +268,7 @@ export default function NewExtraction() {
   const isRealProvider =
     selectedProvider === "openai" ||
     selectedProvider === "gemini" ||
+    selectedProvider === "ollama" ||
     selectedProvider === "auto";
 
   // ── Derived source content ──────────────────────────────────────────────────
@@ -414,11 +433,21 @@ export default function NewExtraction() {
           content: sourceContent,
         },
       });
-
-      await createExtraction.mutateAsync({
-        projectId: project.id,
-        data: { provider: selectedProvider },
+      const extractionRes = await fetch(`/api/projects/${project.id}/extractions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(openaiKey ? { "x-openai-api-key": openaiKey } : {}),
+          ...(geminiKey ? { "x-gemini-api-key": geminiKey } : {}),
+          ...(ollamaBaseUrl ? { "x-ollama-base-url": ollamaBaseUrl } : {}),
+          ...(ollamaModel ? { "x-ollama-model": ollamaModel } : {}),
+        },
+        body: JSON.stringify({ provider: selectedProvider }),
       });
+      if (!extractionRes.ok) {
+        const data = (await extractionRes.json()) as { error?: string };
+        throw new Error(data.error ?? "Extraction failed");
+      }
 
       await queryClient.invalidateQueries({
         queryKey: getListProjectsQueryKey(),
@@ -457,6 +486,66 @@ export default function NewExtraction() {
           missing-information reports.
         </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <KeyRound className="h-4 w-4" />
+            Provider API Keys (browser local)
+          </CardTitle>
+          <CardDescription>
+            Stored only in your browser and sent as request headers for this extraction.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>OpenAI API Key</Label>
+            <Input
+              type="password"
+              value={openaiKey}
+              onChange={(e) => {
+                setOpenaiKey(e.target.value);
+                localStorage.setItem("chemai_openai_key", e.target.value);
+              }}
+              placeholder="sk-..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Gemini API Key</Label>
+            <Input
+              type="password"
+              value={geminiKey}
+              onChange={(e) => {
+                setGeminiKey(e.target.value);
+                localStorage.setItem("chemai_gemini_key", e.target.value);
+              }}
+              placeholder="AIza..."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Ollama Base URL</Label>
+            <Input
+              value={ollamaBaseUrl}
+              onChange={(e) => {
+                setOllamaBaseUrl(e.target.value);
+                localStorage.setItem("chemai_ollama_base_url", e.target.value);
+              }}
+              placeholder="http://localhost:11434"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Ollama Model</Label>
+            <Input
+              value={ollamaModel}
+              onChange={(e) => {
+                setOllamaModel(e.target.value);
+                localStorage.setItem("chemai_ollama_model", e.target.value);
+              }}
+              placeholder="llama3.1:8b"
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── Verification warning ── */}
       <div className="flex gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">

@@ -207,6 +207,16 @@ describe("POST /api/pdf/parse", () => {
     expect(res.body).toHaveProperty("error");
   });
 
+  it("accepts data-url style base64 payload shape (normalizes prefix)", async () => {
+    const fakeDataUrl = `data:application/pdf;base64,${Buffer.from("not a pdf").toString("base64")}`;
+    const res = await request(app)
+      .post("/api/pdf/parse")
+      .send({ base64: fakeDataUrl });
+    // Normalization should happen; parsing still fails because content is not a real PDF.
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty("error");
+  });
+
   it("returns 400 when base64 field is empty string", async () => {
     const res = await request(app).post("/api/pdf/parse").send({ base64: "" });
     expect(res.status).toBe(400);

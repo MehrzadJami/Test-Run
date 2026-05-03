@@ -2,14 +2,6 @@ import { GoogleGenerativeAI, type GenerationConfig } from "@google/generative-ai
 import type { ExtractionProvider, ProviderName } from "../extractor";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./prompt";
 
-let _client: GoogleGenerativeAI | null = null;
-function getClient(): GoogleGenerativeAI {
-  if (!_client) {
-    _client = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"] ?? "");
-  }
-  return _client;
-}
-
 export interface GeminiTokenMeta {
   promptTokens: number;
   candidateTokens: number;
@@ -25,9 +17,11 @@ export class GeminiProvider implements ExtractionProvider {
   readonly name: ProviderName = "gemini";
 
   private readonly modelName: string;
+  private readonly apiKey?: string;
 
-  constructor(modelName = "gemini-1.5-flash") {
+  constructor(modelName = "gemini-1.5-flash", apiKey?: string) {
     this.modelName = modelName;
+    this.apiKey = apiKey;
   }
 
   async extract(sourceText: string): Promise<{
@@ -36,7 +30,9 @@ export class GeminiProvider implements ExtractionProvider {
     providerModel: string;
     systemPrompt: string;
   }> {
-    const client = getClient();
+    const client = new GoogleGenerativeAI(
+      this.apiKey ?? process.env["GEMINI_API_KEY"] ?? "",
+    );
     const model = client.getGenerativeModel({
       model: this.modelName,
       systemInstruction: EXTRACTION_SYSTEM_PROMPT,
