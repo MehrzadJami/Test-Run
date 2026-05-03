@@ -36,6 +36,10 @@ import {
   FlaskConical,
   TrendingUp,
 } from "lucide-react";
+import {
+  isSupportedSimulationModel,
+  SIMULATION_UNSUPPORTED_MESSAGE,
+} from "@/lib/simulation-support";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -306,47 +310,74 @@ export default function Simulation() {
   const [hasRun, setHasRun] = useState(false);
   const [lastParams, setLastParams] = useState<SimParams | null>(null);
   const [mode, setMode] = useState<"demo" | "model">("demo");
+  const [unsupportedModelMessage, setUnsupportedModelMessage] = useState<string | null>(null);
 
   useEffect(() => {
-if (!canUseModelData) return;
-let cancelled = false;
-(async () => {
-  const res = await fetch(`/api/projects/${modelProjectId}/model-card`);
-  if (!res.ok) return;
-  const card = (await res.json()) as {
-    parameters?: Array<{ symbol: string; value?: string | number | null }>;
-  };
-  if (cancelled || !card?.parameters) return;
-    const pMap = new Map<string, string>();
-    for (const p of card.parameters) {
-      pMap.set(String(p.symbol).toLowerCase(), String(p.value ?? ""));
+    if (!canUseModelData) {
+      setUnsupportedModelMessage(null);
+      return;
     }
-    setRawParams((prev) => {
-      const next = { ...prev };
-      const setIf = (key: keyof SimParams, ...aliases: string[]) => {
-        for (const a of aliases) {
-          const v = pMap.get(a);
-          if (v && v.trim() !== "") {
-            next[key] = v;
-            return;
-          }
-        }
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/projects/${modelProjectId}/model-card`);
+      if (!res.ok) return;
+      const card = (await res.json()) as {
+        extraction?: {
+          modelType?: string | null;
+          modelTypeOverride?: string | null;
+          modelCardTitle?: string | null;
+          domain?: string | null;
+          rawExtractionJson?: { system_type?: string | null } | null;
+        };
+        parameters?: Array<{ symbol: string; value?: string | number | null }>;
       };
-      setIf("mumax", "mumax", "mu_max");
-      setIf("Ks", "ks");
-      setIf("D", "d");
-      setIf("Sin", "sin", "s_in");
-      setIf("Yxs", "yxs");
-      setIf("X0", "x0");
-      setIf("S0", "s0");
-      return next;
-    });
-    setMode("model");
-})();
-return () => {
-  cancelled = true;
-};
-}, [canUseModelData, modelProjectId]);
+      if (cancelled || !card?.parameters) return;
+
+      const supported = isSupportedSimulationModel({
+        modelType: card.extraction?.modelType,
+        modelTypeOverride: card.extraction?.modelTypeOverride,
+        modelCardTitle: card.extraction?.modelCardTitle,
+        systemType: card.extraction?.rawExtractionJson?.system_type,
+        domain: card.extraction?.domain,
+      });
+
+      if (!supported) {
+        setUnsupportedModelMessage(SIMULATION_UNSUPPORTED_MESSAGE);
+        setMode("demo");
+        return;
+      }
+
+      setUnsupportedModelMessage(null);
+      const pMap = new Map<string, string>();
+      for (const p of card.parameters) {
+        pMap.set(String(p.symbol).toLowerCase(), String(p.value ?? ""));
+      }
+      setRawParams((prev) => {
+        const next = { ...prev };
+        const setIf = (key: keyof SimParams, ...aliases: string[]) => {
+          for (const a of aliases) {
+            const v = pMap.get(a);
+            if (v && v.trim() !== "") {
+              next[key] = v;
+              return;
+            }
+          }
+        };
+        setIf("mumax", "mumax", "mu_max");
+        setIf("Ks", "ks");
+        setIf("D", "d");
+        setIf("Sin", "sin", "s_in");
+        setIf("Yxs", "yxs");
+        setIf("X0", "x0");
+        setIf("S0", "s0");
+        return next;
+      });
+      setMode("model");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseModelData, modelProjectId]);
 
   const parsed = useMemo(() => toParams(rawParams), [rawParams]);
 
@@ -366,12 +397,12 @@ return () => {
   );
 
   const handleRun = useCallback(() => {
-    if (!isComplete(parsed) || errors.length > 0) return;
+    if (unsupportedModelMessage || !isComplete(parsed) || errors.length > 0) return;
     const data = rungeKutta4(parsed);
     setSimData(data);
     setLastParams({ ...parsed });
     setHasRun(true);
-  }, [parsed, errors]);
+  }, [parsed, errors, unsupportedModelMessage]);
 
   const handleReset = useCallback(() => {
     setRawParams(
@@ -387,7 +418,7 @@ return () => {
   const set = (field: string) => (v: string) =>
     setRawParams((prev) => ({ ...prev, [field]: v }));
 
-  const canRun = isComplete(parsed) && errors.length === 0;
+  const canRun = !unsupportedModelMessage && isComplete(parsed) && errors.length === 0;
 
   const steadyState = useMemo(() => {
     if (!lastParams) return null;
@@ -412,7 +443,7 @@ return () => {
           <div className="flex items-center gap-2 mb-1">
             <FlaskConical className="h-5 w-5 text-primary" />
             <h1 className="text-2xl font-bold tracking-tight">
-              Simulation Playground
+              Demo Monod Chemostat Simulation
             </h1>
             <Badge variant="secondary" className="font-mono text-xs">
               RK4
@@ -421,6 +452,9 @@ return () => {
           <p className="text-sm text-muted-foreground">
             Chemostat / Monod kinetics — solved in-browser with 4th-order
             Runge-Kutta
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            This demo solver is not automatically generated from arbitrary model cards yet.
           </p>
           <p className="text-xs text-muted-foreground mt-1">
             Mode: {mode === "model" ? "Model-derived parameters" : "Demo defaults"}
@@ -448,6 +482,17 @@ return () => {
           </Button>
         </div>
       </div>
+
+      {unsupportedModelMessage ? (
+        <Alert className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/20">
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
+          <AlertTitle>Unsupported model for simulation</AlertTitle>
+          <AlertDescription className="text-sm">
+            {unsupportedModelMessage} The project parameters were not loaded.
+            Open <Link href="/simulation" className="underline underline-offset-2">the demo simulation without a project id</Link> to run the demo model.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {/* ── validation errors ── */}
       {errors.length > 0 && (

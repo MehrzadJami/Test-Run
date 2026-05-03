@@ -68,6 +68,14 @@ docker compose up -d
 This starts a PostgreSQL 16 container on `localhost:5432` with the credentials
 from the default `.env.example`. Stop it with `docker compose down`.
 
+If port `5432` is already used by another local Postgres, set a different host
+port in `.env` and update `DATABASE_URL` to match:
+
+```env
+POSTGRES_PORT=55432
+DATABASE_URL=postgresql://postgres:password@localhost:55432/chemengai
+```
+
 ### Option B — Local PostgreSQL install
 
 Create the database manually:
@@ -133,36 +141,19 @@ Open two terminal tabs.
 **Tab 1 — API server** (serves `/api`, default port 8080)
 
 ```bash
-PORT=8080 BASE_PATH=/api pnpm --filter @workspace/api-server run dev
+PORT=8080 BASE_PATH=/ pnpm --filter @workspace/api-server run dev
 ```
 
 **Tab 2 — Frontend** (serves `/`, default port 5173)
 
 ```bash
-PORT=5173 BASE_PATH=/ pnpm --filter @workspace/chem-ai run dev
+FRONTEND_PORT=5173 VITE_API_TARGET=http://localhost:8080 BASE_PATH=/ pnpm --filter @workspace/chem-ai run dev
 ```
 
 > **Note on ports:** Outside Replit, the two services run on separate ports and
-> there is no shared reverse proxy. The frontend makes API calls to `/api/...`
-> — for local dev you can either:
->
-> a. Run a local nginx/caddy proxy that routes `/api` → port 8080 and `/` →
->    port 5173 (recommended for parity with production).
->
-> b. Add a Vite proxy in `vite.config.ts` for local-only dev (see below).
-
-### Optional: Vite proxy for local dev
-
-Add to `artifacts/chem-ai/vite.config.ts` inside `server: { ... }` — **do not
-commit this change**:
-
-```ts
-proxy: {
-  "/api": "http://localhost:8080",
-},
-```
-
-Then the frontend's API calls will be forwarded to the API server automatically.
+> there is no shared reverse proxy. The committed Vite config proxies `/api`
+> to `VITE_API_TARGET` during local frontend development, so the frontend can
+> still call `/api/...` from `http://localhost:5173`.
 
 ---
 

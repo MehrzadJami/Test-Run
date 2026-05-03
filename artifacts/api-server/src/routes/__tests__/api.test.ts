@@ -109,6 +109,16 @@ Assumptions: perfectly mixed, isothermal, constant volume.
     sourceId = res.body.id;
   });
 
+  it("POST /api/projects/:id/sources — returns 409 for a second source", async () => {
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/sources`)
+      .send({ kind: "text", content: `${SOURCE_TEXT}\nSecond upload.` });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(
+      "This project already has a source document. Multi-source aggregation is not enabled yet. Create a new project for another source.",
+    );
+  });
+
   it("POST /api/projects/:id/sources — returns 404 for unknown project", async () => {
     const res = await request(app)
       .post(`/api/projects/999999/sources`)

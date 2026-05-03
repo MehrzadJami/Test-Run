@@ -82,6 +82,7 @@ describe("getActiveProvider", () => {
   beforeEach(() => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
+    delete process.env["OLLAMA_BASE_URL"];
   });
 
   it("returns mock provider when explicitly requested", () => {
@@ -90,9 +91,15 @@ describe("getActiveProvider", () => {
     expect(p.name).toBe("mock");
   });
 
-  it("falls back to mock when no API keys are configured", () => {
+  it("falls back to rule_based when no API keys are configured", () => {
     const p = getActiveProvider("auto");
-    expect(p.name).toBe("mock");
+    expect(p.name).toBe("rule_based");
+  });
+
+  it("returns rule_based provider when explicitly requested", () => {
+    process.env["OPENAI_API_KEY"] = "sk-fake";
+    const p = getActiveProvider("rule_based");
+    expect(p.name).toBe("rule_based");
   });
 
   it("returns openai when OPENAI_API_KEY is present and preferred", () => {
@@ -107,11 +114,11 @@ describe("getActiveProvider", () => {
     expect(p.name).toBe("gemini");
   });
 
-  it("auto-falls back to mock when requested openai key is absent", () => {
+  it("auto-falls back to rule_based when requested openai key is absent", () => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
     const p = getActiveProvider("openai");
-    expect(p.name).toBe("mock");
+    expect(p.name).toBe("rule_based");
   });
 
   it("auto-prefers openai over gemini when both keys present", () => {
@@ -138,20 +145,21 @@ describe("runExtraction — input validation", () => {
     await expect(runExtraction(short)).rejects.toBeInstanceOf(ExtractionInputError);
   });
 
-  it("succeeds with MockProvider for sufficient text", async () => {
+  it("succeeds with RuleBasedProvider for sufficient text", async () => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
     const { result, providerName } = await runExtraction(SUFFICIENT_TEXT);
-    expect(providerName).toBe("mock");
+    expect(providerName).toBe("rule_based");
     expect(result.paper_title_or_topic).toBeTruthy();
-    expect(result.state_variables.length).toBeGreaterThan(0);
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
   });
 
-  it("auto provider falls back to mock when no OpenAI/Gemini keys exist", async () => {
+  it("auto provider falls back to rule_based when no real providers are configured", async () => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
+    delete process.env["OLLAMA_BASE_URL"];
     const { providerName } = await runExtraction(SUFFICIENT_TEXT, "auto");
-    expect(providerName).toBe("mock");
+    expect(providerName).toBe("rule_based");
   });
 
   it("returns clear provider error when OpenAI is selected without key", async () => {
@@ -181,24 +189,181 @@ describe("MockProvider — ExtractionResultSchema validity", () => {
   beforeEach(() => {
     delete process.env["OPENAI_API_KEY"];
     delete process.env["GEMINI_API_KEY"];
+    delete process.env["OLLAMA_BASE_URL"];
   });
 
   it("returns output that passes ExtractionResultSchema", async () => {
-    const { result } = await runExtraction(SUFFICIENT_TEXT);
+    const { result, providerName } = await runExtraction(SUFFICIENT_TEXT, "mock");
+    expect(providerName).toBe("mock");
     const parsed = ExtractionResultSchema.safeParse(result);
     expect(parsed.success).toBe(true);
   });
 
   it("derives title from first non-empty line of source text", async () => {
-    const { result } = await runExtraction("Monod Chemostat Model\nMore text here...");
+    const { result } = await runExtraction("Monod Chemostat Model\nMore text here...", "mock");
     expect(result.paper_title_or_topic).toBe("Monod Chemostat Model");
   });
 
   it("truncates very long first lines", async () => {
     const longLine = "X".repeat(200) + "\nMore text.";
-    const { result } = await runExtraction(longLine);
+    const { result } = await runExtraction(longLine, "mock");
     expect(result.paper_title_or_topic.length).toBeLessThanOrEqual(92);
     expect(result.paper_title_or_topic.endsWith("...")).toBe(true);
+  });
+});
+
+// ─── RuleBasedProvider output ────────────────────────────────────────────────
+
+describe("RuleBasedProvider", () => {
+  beforeEach(() => {
+    delete process.env["OPENAI_API_KEY"];
+    delete process.env["GEMINI_API_KEY"];
+    delete process.env["OLLAMA_BASE_URL"];
+  });
+
+  const chemostatFixture =
+    "A continuous chemostat is modeled with biomass X and substrate S. " +
+    "The growth rate is mu = mumax*S/(Ks+S). " +
+    "The biomass balance is dX/dt = (mu - D)*X. " +
+    "The substrate balance is dS/dt = D*(Sin - S) - (1/Yxs)*mu*X. " +
+    "Parameters are mumax = 0.8 1/h, Ks = 0.05 g/L, D = 0.1 1/h, " +
+    "Sin = 10 g/L, and Yxs = 0.5 g/g. " +
+    "The reactor is assumed well-mixed and volume is constant.";
+
+  const gasTransferFixture =
+    "In an aerobic bioreactor, dissolved oxygen C_O2 changes due to " +
+    "gas-liquid transfer and biological consumption. " +
+    "The oxygen balance is dC_O2/dt = kLa*(Cstar_O2 - C_O2) - qO2*X. " +
+    "Parameters are kLa = 80 1/h, Cstar_O2 = 0.008 g/L, " +
+    "and qO2 = 0.02 gO2/gX/h. " +
+    "The system assumes constant temperature and well-mixed liquid phase. " +
+    "Henry-law convention was not specified.";
+
+  it("extracts the chemostat fixture with states, parameters, and three equations", async () => {
+    const { result, providerName, audit } = await runExtraction(
+      chemostatFixture,
+      "rule_based",
+    );
+
+    const variableBySymbol = new Map(result.state_variables.map((v) => [v.symbol, v]));
+    const parameterBySymbol = new Map(result.parameters.map((p) => [p.symbol, p]));
+    const equationTexts = result.equations.map((eq) => eq.equation_plaintext);
+
+    expect(providerName).toBe("rule_based");
+    expect(audit.providerModel).toBe("rule_based");
+    expect(result.system_type).toContain("Chemostat");
+
+    expect(variableBySymbol.get("X")).toMatchObject({
+      role: "state",
+      name: "Biomass concentration",
+    });
+    expect(variableBySymbol.get("S")).toMatchObject({
+      role: "state",
+      name: "Substrate concentration",
+    });
+    expect(variableBySymbol.get("mu")).toMatchObject({
+      role: "output",
+      name: "Specific growth rate",
+    });
+
+    expect(parameterBySymbol.get("mumax")).toMatchObject({ value: "0.8", unit: "1/h" });
+    expect(parameterBySymbol.get("Ks")).toMatchObject({ value: "0.05", unit: "g/L" });
+    expect(parameterBySymbol.get("D")).toMatchObject({ value: "0.1", unit: "1/h" });
+    expect(parameterBySymbol.get("Sin")).toMatchObject({ value: "10", unit: "g/L" });
+    expect(parameterBySymbol.get("Yxs")).toMatchObject({ value: "0.5", unit: "g/g" });
+
+    expect(equationTexts).toHaveLength(3);
+    expect(equationTexts).toEqual(
+      expect.arrayContaining([
+        "mu = mumax*S/(Ks+S)",
+        "dX/dt = (mu - D)*X",
+        "dS/dt = D*(Sin - S) - (1/Yxs)*mu*X",
+      ]),
+    );
+    expect(result.assumptions.map((a) => a.assumption).join(" ")).toContain("well-mixed");
+    expect(result.assumptions.map((a) => a.assumption).join(" ")).toContain("constant");
+    expect(result.model_card.inputs).toContain("Sin");
+    expect(result.model_card.outputs).toEqual(expect.arrayContaining(["X", "S", "mu"]));
+    expect(result.model_card.control_variables).toContain("D");
+    expect(result.model_card.missing_information.join(" ")).toMatch(/Initial conditions/i);
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("extracts the gas-transfer fixture with full dC_O2/dt equation", async () => {
+    const { result, providerName } = await runExtraction(
+      gasTransferFixture,
+      "rule_based",
+    );
+
+    const variableBySymbol = new Map(result.state_variables.map((v) => [v.symbol, v]));
+    const parameterBySymbol = new Map(result.parameters.map((p) => [p.symbol, p]));
+    const equationTexts = result.equations.map((eq) => eq.equation_plaintext);
+
+    expect(providerName).toBe("rule_based");
+    expect(result.system_type).toContain("Gas-liquid");
+
+    expect(variableBySymbol.get("C_O2")).toMatchObject({
+      role: "state",
+      name: "Dissolved oxygen concentration",
+    });
+    expect(variableBySymbol.get("X")).toMatchObject({
+      role: "input",
+      name: "Biomass concentration",
+    });
+    expect(parameterBySymbol.get("kLa")).toMatchObject({ value: "80", unit: "1/h" });
+    expect(parameterBySymbol.get("Cstar_O2")).toMatchObject({
+      value: "0.008",
+      unit: "g/L",
+    });
+    expect(parameterBySymbol.get("qO2")).toMatchObject({
+      value: "0.02",
+      unit: "gO2/gX/h",
+    });
+
+    expect(equationTexts).toEqual([
+      "dC_O2/dt = kLa*(Cstar_O2 - C_O2) - qO2*X",
+    ]);
+    expect(result.assumptions.map((a) => a.assumption).join(" ")).toContain(
+      "constant temperature",
+    );
+    expect(result.assumptions.map((a) => a.assumption).join(" ")).toContain(
+      "well-mixed liquid phase",
+    );
+    expect(result.limitations.map((l) => l.limitation).join(" ")).toContain(
+      "Henry-law convention was not specified",
+    );
+    expect(result.model_card.inputs).toContain("X");
+    expect(result.model_card.outputs).toContain("C_O2");
+    expect(result.model_card.control_variables).toContain("kLa");
+    expect(result.model_card.missing_information.join(" ")).toContain(
+      "Henry-law convention was not specified",
+    );
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("cleans trailing punctuation from extracted units", async () => {
+    const { result } = await runExtraction(
+      `${chemostatFixture} ${gasTransferFixture}`,
+      "rule_based",
+    );
+    const units = new Map(result.parameters.map((p) => [p.symbol, p.unit]));
+
+    expect(units.get("Yxs")).toBe("g/g");
+    expect(units.get("qO2")).toBe("gO2/gX/h");
+  });
+
+  it("handles weak generic text gracefully", async () => {
+    const source =
+      "This paragraph discusses experiments qualitatively. No equations are reported and values are unknown. The setup was not specified in detail.";
+
+    const { result, providerName } = await runExtraction(source, "rule_based");
+
+    expect(providerName).toBe("rule_based");
+    expect(result.system_type).toBe("Generic ODE model");
+    expect(result.equations).toHaveLength(0);
+    expect(result.parameters).toHaveLength(0);
+    expect(result.limitations.length).toBeGreaterThan(0);
+    expect(ExtractionResultSchema.safeParse(result).success).toBe(true);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -48,42 +48,12 @@ import {
   FileSearch,
   KeyRound,
 } from "lucide-react";
-
-// ─── Provider config ──────────────────────────────────────────────────────────
-
-type ProviderChoice = "auto" | "mock" | "openai" | "gemini" | "ollama";
-
-const PROVIDER_OPTIONS: {
-  value: ProviderChoice;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "auto",
-    label: "Auto",
-    description: "OpenAI → Gemini → Mock (uses best available key)",
-  },
-  {
-    value: "openai",
-    label: "OpenAI (GPT-4o)",
-    description: "Requires OPENAI_API_KEY",
-  },
-  {
-    value: "gemini",
-    label: "Gemini 1.5 Flash",
-    description: "Requires GEMINI_API_KEY",
-  },
-  {
-    value: "ollama",
-    label: "Ollama (local free)",
-    description: "Requires local Ollama server",
-  },
-  {
-    value: "mock",
-    label: "Mock (demo)",
-    description: "Deterministic demo output — no API key needed",
-  },
-];
+import {
+  MOCK_MODE_POINTS,
+  PROVIDER_OPTIONS,
+  RULE_BASED_MODE_DESCRIPTION,
+  type ProviderChoice,
+} from "@/lib/mock-provider-disclosure";
 
 // ─── Demo source texts ────────────────────────────────────────────────────────
 
@@ -215,6 +185,8 @@ function fileToBase64(file: File): Promise<string> {
 
 // How many characters of PDF extracted text to show in the preview
 const PREVIEW_CHARS = 1800;
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const DEFAULT_OLLAMA_MODEL = "llama3.1:8b";
 
 export default function NewExtraction() {
   const { toast } = useToast();
@@ -234,10 +206,10 @@ export default function NewExtraction() {
     () => localStorage.getItem("chemai_gemini_key") ?? "",
   );
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState(
-    () => localStorage.getItem("chemai_ollama_base_url") ?? "http://localhost:11434",
+    () => localStorage.getItem("chemai_ollama_base_url") ?? DEFAULT_OLLAMA_BASE_URL,
   );
   const [ollamaModel, setOllamaModel] = useState(
-    () => localStorage.getItem("chemai_ollama_model") ?? "llama3.1:8b",
+    () => localStorage.getItem("chemai_ollama_model") ?? DEFAULT_OLLAMA_MODEL,
   );
 
   // ── Text file upload state ──────────────────────────────────────────────────
@@ -265,11 +237,37 @@ export default function NewExtraction() {
     addSource.isPending ||
     createExtraction.isPending;
 
-  const isRealProvider =
-    selectedProvider === "openai" ||
-    selectedProvider === "gemini" ||
+  const isMockDemoProvider = selectedProvider === "mock";
+  const isRuleBasedProvider = selectedProvider === "rule_based";
+  const hasOpenAiKey = openaiKey.trim().length > 0;
+  const hasGeminiKey = geminiKey.trim().length > 0;
+  const hasStoredOllamaConfig =
+    localStorage.getItem("chemai_ollama_base_url") !== null ||
+    localStorage.getItem("chemai_ollama_model") !== null;
+  const hasExplicitOllamaConfig =
+    hasStoredOllamaConfig && ollamaBaseUrl.trim().length > 0;
+  const shouldSendOllamaHeaders =
     selectedProvider === "ollama" ||
-    selectedProvider === "auto";
+    (selectedProvider === "auto" && hasExplicitOllamaConfig);
+  const visibleProviderOptions = PROVIDER_OPTIONS.filter((option) => {
+    if (option.value === "openai") return hasOpenAiKey;
+    if (option.value === "gemini") return hasGeminiKey;
+    return true;
+  });
+  const autoWillUseRuleBasedFirst =
+    selectedProvider === "auto" &&
+    !hasOpenAiKey &&
+    !hasGeminiKey &&
+    !hasExplicitOllamaConfig;
+
+  useEffect(() => {
+    if (selectedProvider === "openai" && !hasOpenAiKey) {
+      setSelectedProvider("auto");
+    }
+    if (selectedProvider === "gemini" && !hasGeminiKey) {
+      setSelectedProvider("auto");
+    }
+  }, [hasGeminiKey, hasOpenAiKey, selectedProvider]);
 
   // ── Derived source content ──────────────────────────────────────────────────
   function getSourceContent(): string {
@@ -439,8 +437,12 @@ export default function NewExtraction() {
           "Content-Type": "application/json",
           ...(openaiKey ? { "x-openai-api-key": openaiKey } : {}),
           ...(geminiKey ? { "x-gemini-api-key": geminiKey } : {}),
-          ...(ollamaBaseUrl ? { "x-ollama-base-url": ollamaBaseUrl } : {}),
-          ...(ollamaModel ? { "x-ollama-model": ollamaModel } : {}),
+          ...(shouldSendOllamaHeaders && ollamaBaseUrl
+            ? { "x-ollama-base-url": ollamaBaseUrl }
+            : {}),
+          ...(shouldSendOllamaHeaders && ollamaModel
+            ? { "x-ollama-model": ollamaModel }
+            : {}),
         },
         body: JSON.stringify({ provider: selectedProvider }),
       });
@@ -559,6 +561,27 @@ export default function NewExtraction() {
             <strong>must be manually verified</strong> against the original
             source before use in simulation, design, or publication. AI models
             can hallucinate values, misread notation, or omit constraints.
+          </p>
+        </div>
+      </div>
+
+      {/* ── Mock mode disclosure ── */}
+      <div
+        className="flex gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4"
+        data-testid="mock-mode-disclosure"
+      >
+        <TriangleAlert className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="space-y-2">
+          <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+            Mock demo mode is not real extraction
+          </p>
+          <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-400 leading-relaxed list-disc pl-4">
+            {MOCK_MODE_POINTS.map((point) => (
+              <li key={point}>{point}</li>
+            ))}
+          </ul>
+          <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+            Configure OpenAI, Gemini, or a local provider to analyze source text.
           </p>
         </div>
       </div>
@@ -848,7 +871,7 @@ export default function NewExtraction() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {PROVIDER_OPTIONS.map((opt) => (
+                    {visibleProviderOptions.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         <div className="flex flex-col py-0.5">
                           <span className="font-medium">{opt.label}</span>
@@ -861,28 +884,42 @@ export default function NewExtraction() {
                   </SelectContent>
                 </Select>
 
+                {selectedProvider === "rule_based" && (
+                  <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 mt-1.5" />
+                    {RULE_BASED_MODE_DESCRIPTION}
+                  </p>
+                )}
                 {selectedProvider === "mock" && (
-                  <p className="text-xs text-muted-foreground flex items-center gap-1">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
-                    Demo mode — deterministic output, no API key needed.
+                  <p className="text-xs text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                    <TriangleAlert className="h-3 w-3 mt-0.5 shrink-0" />
+                    Mock demo: fixed chemostat fixture.
                   </p>
                 )}
                 {selectedProvider === "auto" && (
-                  <p className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Zap className="h-3 w-3" />
-                    Uses the best available key: OpenAI → Gemini → Mock.
+                  <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                    <Zap className="h-3 w-3 mt-0.5 shrink-0" />
+                    {autoWillUseRuleBasedFirst
+                      ? "Auto will use Rule-based local mode, then fall back to Mock if needed."
+                      : "Auto tries configured providers first, then Rule-based local mode, then Mock if needed."}
                   </p>
                 )}
                 {selectedProvider === "openai" && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
-                    Falls back to auto-chain if OPENAI_API_KEY is not set.
+                    Uses the OpenAI key configured in this browser for this extraction.
                   </p>
                 )}
                 {selectedProvider === "gemini" && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-purple-500" />
-                    Falls back to auto-chain if GEMINI_API_KEY is not set.
+                    Uses the Gemini key configured in this browser for this extraction.
+                  </p>
+                )}
+                {selectedProvider === "ollama" && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-500" />
+                    Requires a reachable local Ollama server.
                   </p>
                 )}
               </div>
@@ -923,7 +960,11 @@ export default function NewExtraction() {
                 ) : isBusy ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {isRealProvider ? "Extracting with AI…" : "Extracting…"}
+                    {isMockDemoProvider
+                      ? "Running Mock demo…"
+                      : isRuleBasedProvider
+                      ? "Running rule-based local extraction…"
+                      : "Running extraction…"}
                   </>
                 ) : parsedPdf ? (
                   "Confirm & Extract Model"
@@ -931,14 +972,16 @@ export default function NewExtraction() {
                   "Extract Model"
                 )}
               </Button>
-              {isBusy && !isParsing && isRealProvider && (
+              {isBusy && !isParsing && !isMockDemoProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
-                  Calling AI provider — this may take 10–30 seconds…
+                  {isRuleBasedProvider
+                    ? "Extracting obvious equations, parameters, and units with deterministic local patterns…"
+                    : "Running the selected provider. Auto uses Rule-based local mode before Mock when no configured provider is available."}
                 </p>
               )}
-              {isBusy && !isParsing && !isRealProvider && (
+              {isBusy && !isParsing && isMockDemoProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
-                  Creating project and running extraction…
+                  Creating project and loading fixed MockProvider demo output…
                 </p>
               )}
             </CardFooter>

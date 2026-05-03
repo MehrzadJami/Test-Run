@@ -33,7 +33,7 @@ import { classifyModel } from "@workspace/domain-classifier";
 
 const router: IRouter = Router();
 const CreateExtractionBodyLocal = z.object({
-  provider: z.enum(["auto", "mock", "openai", "gemini", "ollama"]).optional(),
+  provider: z.enum(["auto", "mock", "openai", "gemini", "ollama", "rule_based"]).optional(),
   sourceDocumentId: z.number().int().positive().optional(),
 });
 
@@ -299,10 +299,23 @@ router.post(
       return;
     }
 
+    const [existingSource] = await db
+      .select({ id: sourceDocumentsTable.id })
+      .from(sourceDocumentsTable)
+      .where(eq(sourceDocumentsTable.projectId, project.id))
+      .limit(1);
+    if (existingSource) {
+      res.status(409).json({
+        error:
+          "This project already has a source document. Multi-source aggregation is not enabled yet. Create a new project for another source.",
+      });
+      return;
+    }
+
     const [doc] = await db
       .insert(sourceDocumentsTable)
       .values({
-        projectId: params.data.projectId,
+        projectId: project.id,
         kind: parsed.data.kind,
         filename: parsed.data.filename ?? null,
         content: parsed.data.content,

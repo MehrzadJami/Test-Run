@@ -10,7 +10,7 @@
     "typecheck": "pnpm -w run typecheck:libs && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:unit": "vitest run --config vitest.config.ts src/lib/__tests__",
-    "test:api": "sh -c 'if [ -z \"$DATABASE_URL\" ]; then echo \"DATABASE_URL is required for API tests. Set DATABASE_URL and ensure Postgres is running.\"; exit 1; fi; vitest run --config vitest.config.ts src/routes/__tests__'",
+    "test:api": "node -e \"require('dotenv').config({ path: '../../.env' }); if (!process.env.DATABASE_URL) { console.error('DATABASE_URL is required for API tests. Set DATABASE_URL and ensure Postgres is running.'); process.exit(1); }\" && vitest run --config vitest.config.ts src/routes/__tests__",
     "test:watch": "vitest --config vitest.config.ts",
     "ci": "pnpm run typecheck && pnpm run test && pnpm run build"
   },
@@ -22,6 +22,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2",
     "drizzle-orm": "catalog:",
+    "dotenv": "^16.4.7",
     "express": "^5",
     "openai": "^6.35.0",
     "openid-client": "^6.8.4",

@@ -212,13 +212,13 @@ pnpm --filter @workspace/db run migrate
 pnpm --filter @workspace/db run seed
 
 # 6. Start the API server
-pnpm --filter @workspace/api-server run dev
+PORT=8080 pnpm --filter @workspace/api-server run dev
 
 # 7. Start the frontend (separate terminal)
-pnpm --filter @workspace/chem-ai run dev
+FRONTEND_PORT=5173 VITE_API_TARGET=http://localhost:8080 pnpm --filter @workspace/chem-ai run dev
 ```
 
-The frontend is served at `http://localhost:<PORT>/` and the API at `http://localhost:<PORT>/api`.
+The frontend is served at `http://localhost:5173/` and proxies `/api` requests to the API at `http://localhost:8080/api`.
 
 See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for detailed Replit setup, port configuration, and troubleshooting.
 
@@ -230,7 +230,9 @@ See [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) for detailed Replit setup, port c
 |---|---|---|---|
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `SESSION_SECRET` | Yes (prod) | — | Secret for session signing |
-| `PORT` | No | `8080` (API) | Assigned automatically by Replit |
+| `PORT` | No | `8080` (API) | API server port |
+| `FRONTEND_PORT` | No | `5173` | Local Vite frontend port |
+| `VITE_API_TARGET` | No | `http://localhost:8080` | Local Vite proxy target for `/api` |
 | `OPENAI_API_KEY` | No | — | Enables OpenAI GPT-4o provider; falls back to Gemini or Mock without it |
 | `GEMINI_API_KEY` | No | — | Enables Gemini 1.5 Flash provider; falls back to Mock without it |
 | `NODE_ENV` | No | `development` | Set to `production` for deployed builds |

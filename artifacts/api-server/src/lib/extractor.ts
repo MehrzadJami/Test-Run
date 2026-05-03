@@ -1,16 +1,17 @@
 // Extraction engine.
 //
 // Provider abstraction:
-//   Three providers are supported: MockProvider (deterministic, always available),
-//   OpenAIProvider (requires OPENAI_API_KEY), and GeminiProvider (requires
-//   GEMINI_API_KEY). The active provider is selected by getActiveProvider()
-//   based on the caller's preference and which API keys are present in the
-//   environment. Keys are NEVER hardcoded.
+//   Providers include real AI providers (OpenAI, Gemini, Ollama), a local
+//   RuleBasedProvider, and MockProvider (deterministic demo fallback). The
+//   active provider is selected by getActiveProvider() based on the caller's
+//   preference and which provider configuration is present. Keys are NEVER
+//   hardcoded.
 //
 // Provider priority (getActiveProvider):
 //   1. If the caller requests a specific named provider AND its key exists → use it.
 //   2. If the caller requests "mock" → always use MockProvider (no key needed).
-//   3. Otherwise (auto or requested key not available) → OpenAI → Gemini → Mock.
+//   3. Otherwise (auto or requested provider not available) →
+//      OpenAI → Gemini → Ollama → RuleBasedProvider → Mock.
 //
 // Validation contract:
 //   runExtraction() is the single public entry point. It validates input,
@@ -44,6 +45,7 @@ import {
 import { OpenAIProvider } from "./providers/openai-provider";
 import { GeminiProvider } from "./providers/gemini-provider";
 import { OllamaProvider } from "./providers/ollama-provider";
+import { RuleBasedProvider } from "./providers/rule-based-provider";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./providers/prompt";
 import { logger } from "./logger";
 
@@ -72,7 +74,7 @@ export class ExtractionProviderError extends Error {
 
 // ---------- Provider interface ----------
 
-export type ProviderName = "mock" | "openai" | "gemini" | "ollama";
+export type ProviderName = "mock" | "openai" | "gemini" | "ollama" | "rule_based";
 export type ProviderPreference = ProviderName | "auto";
 
 export interface ExtractionProvider {
@@ -83,7 +85,7 @@ export interface ExtractionProvider {
    * bypass validation.
    *
    * Real providers return `{ raw, tokenMeta, providerModel, systemPrompt }`.
-   * MockProvider returns an ExtractionResult directly (no token metadata).
+   * Local providers return an ExtractionResult directly (no token metadata).
    */
   extract(sourceText: string): Promise<unknown>;
 }
@@ -101,19 +103,19 @@ export interface ExtractionProvider {
  * - tokenUsage contains counts and estimated cost only — no billing details.
  */
 export type AuditData = {
-  /** Exact model identifier, e.g. "gpt-4o", "gemini-1.5-flash", "mock". */
+  /** Exact model identifier, e.g. "gpt-4o", "gemini-1.5-flash", "rule_based". */
   providerModel: string;
-  /** System prompt sent to the provider. Safe — no secrets. Empty for mock. */
+  /** System prompt sent to the provider. Safe — no secrets. Empty for local providers. */
   systemPrompt: string;
   /** Short description of the extraction template purpose. */
   promptTemplateSummary: string;
-  /** Raw provider response BEFORE JSON repair and Zod validation. Null for mock. */
+  /** Raw provider response BEFORE JSON repair and Zod validation. Null for local providers. */
   rawProviderResponse: unknown;
   /** Whether the response needed JSON repair before it could be validated. */
   repairStatus: "not_needed" | "repaired" | "failed";
   /** Zod validation error text if any. Null when extraction succeeded cleanly. */
   validationErrors: string | null;
-  /** Token count / estimated cost metadata. Null when unavailable (mock always null). */
+  /** Token count / estimated cost metadata. Null when unavailable. */
   tokenUsage: Record<string, unknown> | null;
 };
 
@@ -275,10 +277,12 @@ function tryRepairJson(raw: unknown): unknown {
  * Select the active extraction provider.
  *
  * Priority rules (see module header for full description):
- *  - "mock"   → always MockProvider
- *  - "openai" → OpenAIProvider if OPENAI_API_KEY present, else auto-fallback
- *  - "gemini" → GeminiProvider if GEMINI_API_KEY present, else auto-fallback
- *  - "auto" / undefined → OpenAI → Gemini → Mock
+ *  - "mock"       → always MockProvider
+ *  - "rule_based" → always RuleBasedProvider
+ *  - "openai"     → OpenAIProvider if OPENAI_API_KEY present, else auto-fallback
+ *  - "gemini"     → GeminiProvider if GEMINI_API_KEY present, else auto-fallback
+ *  - "ollama"     → OllamaProvider if configured, else auto-fallback
+ *  - "auto" / undefined → OpenAI → Gemini → Ollama → RuleBasedProvider → Mock
  */
 export function getActiveProvider(
   preferred?: ProviderPreference,
@@ -296,6 +300,9 @@ export function getActiveProvider(
   if (preferred === "mock") {
     return new MockProvider();
   }
+  if (preferred === "rule_based") {
+    return new RuleBasedProvider();
+  }
   if (preferred === "openai" && hasOpenAI) {
     return new OpenAIProvider("gpt-4o", runtimeKeys?.openaiApiKey);
   }
@@ -311,7 +318,11 @@ export function getActiveProvider(
   if (hasGemini)
     return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
   if (hasOllama) return new OllamaProvider(runtimeKeys?.ollamaBaseUrl, runtimeKeys?.ollamaModel);
-  return new MockProvider();
+  try {
+    return new RuleBasedProvider();
+  } catch {
+    return new MockProvider();
+  }
 }
 
 // ---------- Public entry point ----------
@@ -371,7 +382,7 @@ export async function runExtraction(
   }
 
   // Real providers return { raw, tokenMeta, providerModel, systemPrompt };
-  // MockProvider returns the ExtractionResult directly.
+  // Local providers return the ExtractionResult directly.
   // Normalise to: candidate, tokenMeta, providerModel, capturedSystemPrompt.
   let candidate: unknown;
   let tokenMeta: Record<string, unknown> | null = null;
@@ -400,10 +411,10 @@ export async function runExtraction(
     providerModelId = typed.providerModel ?? "";
     capturedSystemPrompt = typed.systemPrompt ?? "";
   } else {
-    // Mock provider — returns ExtractionResult directly, no API call made.
+    // Local providers — return ExtractionResult directly, no API call made.
     candidate = providerOutput;
     rawProviderResponse = null;
-    providerModelId = "mock";
+    providerModelId = provider.name;
     capturedSystemPrompt = "";
   }
 

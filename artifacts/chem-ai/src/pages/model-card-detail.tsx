@@ -55,6 +55,11 @@ import {
 } from "@/lib/reproducibility";
 import { runUnitCheck, type UnitCheckReport, type UnitWarnSeverity } from "@/lib/unit-checker";
 import {
+  analyzeModelAssembly,
+  type MissingRequirementSeverity,
+  type ModelAssemblyReport,
+} from "@/lib/model-assembly";
+import {
   runFormalDimensionalAnalysis,
   type FormalCheckReport,
   type FormalEqResult,
@@ -64,6 +69,11 @@ import { generateJupyterNotebook } from "@/lib/notebook-generator";
 import { buildAggregatedModelCard, detectConflicts } from "@/lib/multi-source";
 import { matchTemplates, type TemplateScanResult, type RunnableTemplateStatus } from "@/lib/template-matcher";
 import { generateModelPackage } from "@/lib/package-generator";
+import { isMockProvider, MOCK_PROVIDER_WARNING } from "@/lib/mock-provider-disclosure";
+import {
+  isSupportedSimulationModel,
+  SIMULATION_UNSUPPORTED_MESSAGE,
+} from "@/lib/simulation-support";
 import { VariablesTab } from "@/components/model-card/VariablesTab";
 import { ParametersTab } from "@/components/model-card/ParametersTab";
 import { EquationsTab } from "@/components/model-card/EquationsTab";
@@ -315,6 +325,35 @@ const SEVERITY_CONFIG: Record<
   },
 };
 
+function assemblyStatusClass(status: ModelAssemblyReport["assembly_status"]): string {
+  if (status === "complete") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/40 dark:bg-emerald-950/30 dark:text-emerald-400";
+  }
+  if (status === "partial") {
+    return "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300";
+  }
+  return "border-destructive/30 bg-destructive/10 text-destructive";
+}
+
+const ASSEMBLY_SEVERITY_CONFIG: Record<
+  MissingRequirementSeverity,
+  { classes: string; label: string }
+> = {
+  critical: {
+    classes: "border-destructive/30 bg-destructive/10 text-destructive",
+    label: "Critical",
+  },
+  warning: {
+    classes:
+      "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300",
+    label: "Warning",
+  },
+  info: {
+    classes: "border-border bg-muted/50 text-muted-foreground",
+    label: "Info",
+  },
+};
+
 // ─── Main page component ───────────────────────────────────────────────────────
 
 export default function ModelCardDetail() {
@@ -435,6 +474,17 @@ function ModelCardDetailInner({
   const [copied, setCopied] = useState(false);
   const visibility = project?.visibility ?? "public";
   const isPublic = visibility === "public";
+  const isMockModelCard = isMockProvider(extraction.providerUsed);
+  const supportsSimulation = isSupportedSimulationModel({
+    modelType: extraction.modelType,
+    modelTypeOverride: extraction.modelTypeOverride,
+    modelCardTitle: extraction.modelCardTitle,
+    systemType: raw?.system_type,
+    domain: extraction.domain,
+  });
+  const showSimulationControl = Boolean(
+    raw?.model_card?.can_generate_ode_template || supportsSimulation,
+  );
 
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
   const shareUrl = `${window.location.origin}${base}/share/model-cards/${extractionId}`;
@@ -486,6 +536,22 @@ function ModelCardDetailInner({
   // ── Unit & dimension check (memoized) ────────────────────────────────────
   const unitReport = useMemo(
     () => runUnitCheck(equations, variables, parameters, raw ?? null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters)]
+  );
+
+  // ── Model assembly readiness (memoized) ─────────────────────────────────
+  const assemblyReport = useMemo(
+    () =>
+      analyzeModelAssembly({
+        equations,
+        variables,
+        parameters,
+        assumptions: [...assumptionItems, ...limitationItems],
+        raw: raw ?? null,
+        systemDescription: extraction.systemDescription ?? "",
+        problemStatement: extraction.problemStatement ?? "",
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectId, cardQuery_nonce(equations, variables, parameters)]
   );
@@ -681,6 +747,17 @@ function ModelCardDetailInner({
             </Badge>
           )}
         </div>
+        {isMockModelCard ? (
+          <div
+            className="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+            data-testid="mock-provider-warning"
+          >
+            <TriangleAlert className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
+              {MOCK_PROVIDER_WARNING}
+            </p>
+          </div>
+        ) : null}
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-primary mb-2">
@@ -737,17 +814,37 @@ function ModelCardDetailInner({
                 {copied ? "Copied!" : "Share Link"}
               </Button>
             )}
-            {raw?.model_card?.can_generate_ode_template && (
-              <Link href="/simulation">
-                <Button
-                  variant="default"
-                  size="default"
-                  data-testid="btn-run-simulation"
-                >
-                  <Play className="h-4 w-4 mr-2" />
-                  Run Simulation
-                </Button>
-              </Link>
+            {showSimulationControl && (
+              <div className="flex flex-col items-end gap-1">
+                {supportsSimulation ? (
+                  <Link href={`/simulation?projectId=${projectId}`}>
+                    <Button
+                      variant="default"
+                      size="default"
+                      data-testid="btn-run-simulation"
+                    >
+                      <Play className="h-4 w-4 mr-2" />
+                      Run Simulation
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="default"
+                    disabled
+                    title={SIMULATION_UNSUPPORTED_MESSAGE}
+                    data-testid="btn-run-simulation"
+                  >
+                    <Play className="h-4 w-4 mr-2" />
+                    Run Simulation
+                  </Button>
+                )}
+                {!supportsSimulation ? (
+                  <p className="max-w-[220px] text-right text-xs text-muted-foreground">
+                    {SIMULATION_UNSUPPORTED_MESSAGE}
+                  </p>
+                ) : null}
+              </div>
             )}
             <Button
               variant="outline"
@@ -822,6 +919,14 @@ function ModelCardDetailInner({
           </TabsTrigger>
           <TabsTrigger value="missing" data-testid="tab-missing">
             Missing Info
+          </TabsTrigger>
+          <TabsTrigger value="assembly" data-testid="tab-assembly">
+            Assembly
+            {assemblyReport.missing_requirements.filter((m) => m.severity === "critical").length > 0 && (
+              <span className="ml-1 text-red-500 font-bold">
+                ({assemblyReport.missing_requirements.filter((m) => m.severity === "critical").length})
+              </span>
+            )}
           </TabsTrigger>
           <TabsTrigger value="ode" data-testid="tab-ode">
             ODE Template
@@ -1031,6 +1136,156 @@ function ModelCardDetailInner({
                   ))}
                 </ul>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Model Assembly Readiness ── */}
+        <TabsContent value="assembly" className="mt-6 space-y-6">
+          <Card className={`border ${assemblyStatusClass(assemblyReport.assembly_status)}`}>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldAlert className="h-5 w-5" />
+                    Model Assembly Readiness
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Target: {assemblyReport.target_model_type}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="uppercase">
+                    {assemblyReport.assembly_status}
+                  </Badge>
+                  <Badge variant={assemblyReport.can_generate_scaffold ? "default" : "secondary"}>
+                    Scaffold: {assemblyReport.can_generate_scaffold ? "yes" : "no"}
+                  </Badge>
+                  <Badge variant={assemblyReport.can_generate_runnable_model ? "default" : "secondary"}>
+                    Runnable: {assemblyReport.can_generate_runnable_model ? "yes" : "no"}
+                  </Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm">
+                {assemblyReport.can_generate_runnable_model
+                  ? "The extracted information appears sufficient for a runnable model, pending human review."
+                  : assemblyReport.can_generate_scaffold
+                    ? "The current source can support a scaffold, but missing requirements should be resolved before claiming a runnable dynamic model."
+                    : "The current source does not contain enough structured information to assemble a model scaffold."}
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Available From Current Source</CardTitle>
+              <CardDescription>
+                Extracted equations, states, controls, parameters, and assumptions that can be used as model-building evidence.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {assemblyReport.available_from_current_source.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">
+                  No assembly-ready evidence detected in the extracted model data.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {assemblyReport.available_from_current_source.map((item, i) => (
+                    <div
+                      key={`${item.type}-${item.item}-${i}`}
+                      className="rounded-lg border p-3 text-sm"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant="secondary" className="uppercase text-[10px]">
+                          {item.type}
+                        </Badge>
+                        <span className="font-medium">{item.item}</span>
+                        <Badge variant="outline" className="text-[10px]">
+                          {item.confidence}
+                        </Badge>
+                      </div>
+                      {item.source_context ? (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {item.source_context}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Missing Parameter Resolver</CardTitle>
+              <CardDescription>
+                Requirements still needed before this should be treated as a complete dynamic model.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {assemblyReport.missing_requirements.length === 0 ? (
+                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 text-sm">
+                  <CheckCircle2 className="h-4 w-4" />
+                  No missing assembly requirements detected.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {assemblyReport.missing_requirements.map((missing, i) => {
+                    const cfg = ASSEMBLY_SEVERITY_CONFIG[missing.severity];
+                    return (
+                      <div
+                        key={`${missing.category}-${missing.item}-${i}`}
+                        className={`rounded-lg border p-3 text-sm ${cfg.classes}`}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className="uppercase text-[10px]">
+                            {cfg.label}
+                          </Badge>
+                          <Badge variant="secondary" className="uppercase text-[10px]">
+                            {missing.category.replace(/_/g, " ")}
+                          </Badge>
+                          <span className="font-semibold">{missing.item}</span>
+                        </div>
+                        <div className="mt-2 space-y-1 text-xs opacity-90">
+                          <p>
+                            <span className="font-semibold">Required for:</span>{" "}
+                            {missing.required_for}
+                          </p>
+                          <p>
+                            <span className="font-semibold">Why:</span>{" "}
+                            {missing.why_needed}
+                          </p>
+                          <p>
+                            <span className="font-semibold">Suggested source:</span>{" "}
+                            {missing.suggested_source.replace(/_/g, " ")}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-primary/5 border-primary/20">
+            <CardHeader>
+              <CardTitle>Recommended Next Actions</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ol className="space-y-3">
+                {assemblyReport.recommended_next_actions.map((action, i) => (
+                  <li key={`${action}-${i}`} className="flex items-start gap-3 text-sm">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center mt-0.5">
+                      {i + 1}
+                    </span>
+                    {action}
+                  </li>
+                ))}
+              </ol>
             </CardContent>
           </Card>
         </TabsContent>
