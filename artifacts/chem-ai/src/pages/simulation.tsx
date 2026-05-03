@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Link } from "wouter";
+import { useGetModelCardByProject } from "@workspace/api-client-react";
 import {
   LineChart,
   Line,
@@ -307,13 +308,15 @@ export default function Simulation() {
   const [mode, setMode] = useState<"demo" | "model">("demo");
 
   useEffect(() => {
-    if (!canUseModelData) return;
-    let cancelled = false;
-    (async () => {
-      const res = await fetch(`/api/projects/${modelProjectId}/model-card`);
-      if (!res.ok) return;
-      const card = (await res.json()) as { parameters?: Array<{ symbol: string; value?: string | number | null }> };
-      if (cancelled || !card?.parameters) return;
+if (!canUseModelData) return;
+let cancelled = false;
+(async () => {
+  const res = await fetch(`/api/projects/${modelProjectId}/model-card`);
+  if (!res.ok) return;
+  const card = (await res.json()) as {
+    parameters?: Array<{ symbol: string; value?: string | number | null }>;
+  };
+  if (cancelled || !card?.parameters) return;
     const pMap = new Map<string, string>();
     for (const p of card.parameters) {
       pMap.set(String(p.symbol).toLowerCase(), String(p.value ?? ""));
@@ -339,11 +342,11 @@ export default function Simulation() {
       return next;
     });
     setMode("model");
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseModelData, modelProjectId]);
+})();
+return () => {
+  cancelled = true;
+};
+}, [canUseModelData, modelProjectId]);
 
   const parsed = useMemo(() => toParams(rawParams), [rawParams]);
 
