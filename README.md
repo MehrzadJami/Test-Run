@@ -130,6 +130,24 @@ Steps 1–9 can be completed in under two minutes for a well-structured paper ex
 
 ---
 
+## 5.1 Current Gaps & Bug-Hunt Priorities (May 2026)
+
+This project has moved fast and currently has several areas that need a dedicated stability sprint:
+
+- **PDF extraction quality variability** on some non-scanned PDFs (parser output can still be low-quality depending on document structure).
+- **Simulation trustworthiness** is still constrained by model compatibility; some flows fall back to demo assumptions.
+- **Provider UX consistency** (runtime keys/providers added incrementally; needs a unified settings/diagnostics experience).
+- **Documentation drift risk** after rapid milestone shipping (feature counts, route tables, and behavior notes can desync).
+- **Multi-source aggregation robustness** requires deeper fixture coverage and conflict-resolution UX.
+
+Planned remediation is tracked in `kanban.md` under:
+- **M27 Stability & Bug-Hunt Hardening**
+- **M28 OCR & Document Ingestion Quality**
+- **M29 Simulation Reliability Upgrade**
+- **M30 Provider UX & Security Hardening**
+
+---
+
 ## 6. Tech Stack
 
 | Layer | Technology |
