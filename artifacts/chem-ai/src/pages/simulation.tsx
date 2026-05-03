@@ -1,6 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Link } from "wouter";
-import { useGetModelCardByProject } from "@workspace/api-client-react";
 import {
   LineChart,
   Line,
@@ -295,10 +294,6 @@ export default function Simulation() {
   const qp = new URLSearchParams(window.location.search);
   const modelProjectId = Number(qp.get("projectId") ?? "");
   const canUseModelData = Number.isFinite(modelProjectId) && modelProjectId > 0;
-  const modelCardQuery = useGetModelCardByProject(
-    canUseModelData ? modelProjectId : -1,
-    { query: { enabled: canUseModelData } },
-  );
 
   const [rawParams, setRawParams] = useState<Record<string, string>>(
     () =>
@@ -312,8 +307,13 @@ export default function Simulation() {
   const [mode, setMode] = useState<"demo" | "model">("demo");
 
   useEffect(() => {
-    const card = modelCardQuery.data;
-    if (!card?.parameters) return;
+    if (!canUseModelData) return;
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/projects/${modelProjectId}/model-card`);
+      if (!res.ok) return;
+      const card = (await res.json()) as { parameters?: Array<{ symbol: string; value?: string | number | null }> };
+      if (cancelled || !card?.parameters) return;
     const pMap = new Map<string, string>();
     for (const p of card.parameters) {
       pMap.set(String(p.symbol).toLowerCase(), String(p.value ?? ""));
@@ -339,7 +339,11 @@ export default function Simulation() {
       return next;
     });
     setMode("model");
-  }, [modelCardQuery.data]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseModelData, modelProjectId]);
 
   const parsed = useMemo(() => toParams(rawParams), [rawParams]);
 

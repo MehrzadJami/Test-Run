@@ -117,3 +117,19 @@ Then verify in browser:
 ## Mock-mode reliability note
 - Current provider chain still supports `mock` fallback when paid keys are absent.
 - For local/no-cost operation, explicitly choose `Mock` (or `Auto` with no configured paid keys).
+
+
+## Bootstrap/typecheck fixes applied in this pass
+- Added workspace-lib prebuild step to package typecheck scripts:
+  - `artifacts/api-server/package.json` `typecheck` now runs `pnpm -w run typecheck:libs` first.
+  - `artifacts/chem-ai/package.json` `typecheck` now runs `pnpm -w run typecheck:libs` first.
+- Added root scripts in `package.json`: `test:unit`, `test:api`, `test`, `ci`.
+- Added clear DB-required guard to `artifacts/api-server` `test:api` script.
+- Fixed type mismatch for provider enum by adding `ollama` to `lib/db/src/schema/extractions.ts` provider enum.
+- Added global Express auth type declarations in `artifacts/api-server/src/types/express-auth.d.ts` and removed duplicate in middleware.
+
+Current status in this environment:
+- `pnpm -r typecheck` passes.
+- `pnpm test:unit` passes without DB.
+- `pnpm test:api` fails fast with clear DATABASE_URL message if DB is missing.
+- `pnpm run ci` reaches test:api and fails fast with the same clear message in no-DB environments.

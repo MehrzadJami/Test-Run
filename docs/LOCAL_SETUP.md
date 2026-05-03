@@ -188,6 +188,29 @@ sidebar footer.
 
 ---
 
+## Test and typecheck commands (DB-aware)
+
+### Commands that should pass **without** DATABASE_URL
+
+```bash
+pnpm install
+pnpm -r build
+pnpm test:unit
+```
+
+### Commands that require DATABASE_URL (+ reachable Postgres)
+
+```bash
+pnpm -r typecheck
+pnpm test:api
+pnpm ci
+```
+
+If Docker is unavailable, point `DATABASE_URL` to any external Postgres
+(Replit Postgres, Neon, Supabase, local managed instance).
+
+---
+
 ## Replit Setup
 
 In Replit, the environment is configured automatically:
