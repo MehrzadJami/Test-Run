@@ -8,6 +8,7 @@ import {
 describe("simulation support detection", () => {
   it("supports explicit Monod chemostat model type", () => {
     expect(isSupportedSimulationModel({ rawModelType: "monod_chemostat" })).toBe(true);
+    expect(isSupportedSimulationModel({ rawModelType: "chemostat" })).toBe(true);
     expect(getSupportedSimulationModelType({ rawModelType: "monod_chemostat" })).toBe(
       "monod_chemostat",
     );
@@ -34,10 +35,12 @@ describe("simulation support detection", () => {
 
   it("does not support non-v1 or legacy implicit model metadata", () => {
     expect(isSupportedSimulationModel({ rawModelType: "gas_liquid" })).toBe(false);
+    expect(isSupportedSimulationModel({ rawModelType: "gas_liquid_transfer" })).toBe(false);
     expect(isSupportedSimulationModel({ rawModelType: "oxygen_balanced_mixotrophy" })).toBe(false);
     expect(isSupportedSimulationModel({ rawModelType: "pfr" })).toBe(false);
     expect(isSupportedSimulationModel({ rawModelType: "cstr" })).toBe(false);
     expect(isSupportedSimulationModel({ rawModelType: "unknown" })).toBe(false);
+    expect(isSupportedSimulationModel({ rawModelType: "generic_ode" })).toBe(false);
     expect(isSupportedSimulationModel({ modelCardTitle: "Monod chemostat model" })).toBe(false);
     expect(isSupportedSimulationModel(null)).toBe(false);
   });

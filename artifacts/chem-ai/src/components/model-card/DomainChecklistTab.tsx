@@ -47,6 +47,7 @@ import {
   getDomainTemplate,
   MODEL_TYPES,
   MODEL_TYPE_DISPLAY_NAMES,
+  normalizeModelType,
 } from "@workspace/domain-classifier";
 import type { ModelType, ChecklistItem } from "@workspace/domain-classifier";
 
@@ -77,7 +78,7 @@ interface Props {
 
 function effectiveModelType(ext: DomainChecklistExtractionFields): ModelType {
   const raw = ext.modelTypeOverride ?? ext.modelType;
-  return (MODEL_TYPES.includes(raw as ModelType) ? raw : "generic_ode") as ModelType;
+  return normalizeModelType(raw);
 }
 
 function confidencePct(conf: number): string {
@@ -304,7 +305,7 @@ export function DomainChecklistTab({ extraction, variables, parameters, onOverri
   const effective = effectiveModelType(extraction);
   const template = getDomainTemplate(effective);
   const isOverridden = extraction.modelTypeOverride != null;
-  const detectedType = extraction.modelType as ModelType;
+  const detectedType = normalizeModelType(extraction.modelType);
 
   function handleOverrideSuccess() {
     void queryClient.invalidateQueries();
@@ -389,9 +390,9 @@ export function DomainChecklistTab({ extraction, variables, parameters, onOverri
             </div>
           )}
 
-          {extraction.modelTypeMatchedKeywords.length === 0 && effective === "generic_ode" && (
+          {extraction.modelTypeMatchedKeywords.length === 0 && effective === "unknown" && (
             <p className="mt-2 text-xs text-muted-foreground italic">
-              No domain-specific keywords detected. Defaulted to Generic ODE Model. Use the override below to set a specific type.
+              No domain-specific keywords detected. Defaulted to Unknown Model Type. Use the override below to set a specific type.
             </p>
           )}
 

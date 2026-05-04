@@ -9,13 +9,13 @@
  * transparency aids; they are never used to reject or alter an extraction.
  */
 
-import type { DomainTemplate, ModelType } from "./types";
+import { normalizeModelType, type DomainTemplate, type ModelType } from "./types";
 
 // ── Chemostat / Continuous Stirred Tank Bioreactor ───────────────────────────
 
 const CHEMOSTAT: DomainTemplate = {
-  modelType: "chemostat",
-  displayName: "Chemostat / CSTBR",
+  modelType: "monod_chemostat",
+  displayName: "Monod Chemostat",
   description:
     "Continuous-culture bioreactor where a liquid medium is continuously fed and removed at equal volumetric rates, maintaining a constant culture volume. At steady state, growth rate equals the dilution rate D.",
   expectedVariables: [
@@ -162,8 +162,8 @@ const CHEMOSTAT: DomainTemplate = {
 // ── Batch Reactor ────────────────────────────────────────────────────────────
 
 const BATCH_REACTOR: DomainTemplate = {
-  modelType: "batch_reactor",
-  displayName: "Batch Reactor",
+  modelType: "batch_culture",
+  displayName: "Batch Culture",
   description:
     "Closed system with no continuous inflow or outflow. All substrates and inoculum are added at t=0; the reaction proceeds until substrate depletion or a set endpoint.",
   expectedVariables: [
@@ -376,8 +376,8 @@ const CSTR: DomainTemplate = {
 // ── Gas-Liquid Oxygen Transfer ───────────────────────────────────────────────
 
 const GAS_LIQUID_TRANSFER: DomainTemplate = {
-  modelType: "gas_liquid_transfer",
-  displayName: "Gas-Liquid / O₂ Transfer",
+  modelType: "gas_liquid",
+  displayName: "Gas-Liquid",
   description:
     "Aerobic bioreactor model focused on dissolved oxygen dynamics. Key parameter is the volumetric oxygen mass transfer coefficient kLa. Models the balance between oxygen supply (OTR) and microbial demand (OUR).",
   expectedVariables: [
@@ -448,8 +448,8 @@ const GAS_LIQUID_TRANSFER: DomainTemplate = {
 // ── Microalgae / Photobioreactor ─────────────────────────────────────────────
 
 const MICROALGAE_PBR: DomainTemplate = {
-  modelType: "microalgae_pbr",
-  displayName: "Microalgae / PBR",
+  modelType: "microalgae_photobioreactor",
+  displayName: "Microalgae Photobioreactor",
   description:
     "Photobioreactor model for microalgal growth driven by light irradiance. Growth rate is a function of light intensity (often Monod-type or Haldane inhibition for high irradiance).",
   expectedVariables: [
@@ -520,13 +520,123 @@ const MICROALGAE_PBR: DomainTemplate = {
   ],
 };
 
-// ── Generic ODE ──────────────────────────────────────────────────────────────
+// ── PFR ──────────────────────────────────────────────────────────────────────
 
-const GENERIC_ODE: DomainTemplate = {
-  modelType: "generic_ode",
-  displayName: "Generic ODE Model",
+const PFR: DomainTemplate = {
+  modelType: "pfr",
+  displayName: "PFR",
   description:
-    "No specific domain was detected. The general good-practice checklist below applies to any ODE system.",
+    "Plug-flow reactor model with axial or residence-time dependence. Dynamic support is not assumed unless explicit balances are extracted.",
+  expectedVariables: [],
+  expectedParameters: [],
+  checklistItems: [
+    {
+      id: "pfr-coordinate",
+      category: "variable",
+      description: "Axial coordinate or residence-time coordinate is specified.",
+      severity: "critical",
+    },
+    {
+      id: "pfr-rate-law",
+      category: "equation",
+      description: "Reaction rate expression and material balance are explicitly stated.",
+      severity: "critical",
+    },
+  ],
+  odeHints: [
+    { description: "Generic PFR balance", example: "dF_A/dV = r_A" },
+  ],
+  unitRules: [],
+};
+
+// ── Enzyme Kinetics ──────────────────────────────────────────────────────────
+
+const ENZYME_KINETICS: DomainTemplate = {
+  modelType: "enzyme_kinetics",
+  displayName: "Enzyme Kinetics",
+  description:
+    "Enzyme kinetic model, often Michaelis-Menten or inhibited variants, focused on substrate/product rate expressions.",
+  expectedVariables: [
+    { symbol: "S", name: "Substrate concentration", unit: "mol/L", required: true },
+    { symbol: "P", name: "Product concentration", unit: "mol/L", required: false },
+  ],
+  expectedParameters: [
+    { symbol: "Vmax", name: "Maximum reaction rate", unit: "mol/L/s", required: true },
+    { symbol: "Km", name: "Michaelis constant", unit: "mol/L", required: true },
+  ],
+  checklistItems: [
+    {
+      id: "enzyme-rate",
+      category: "equation",
+      description: "Rate law is explicitly stated, including inhibition terms if used.",
+      severity: "critical",
+    },
+    {
+      id: "enzyme-units",
+      category: "unit",
+      description: "Vmax and Km units are reported consistently.",
+      severity: "warning",
+    },
+  ],
+  odeHints: [
+    { description: "Michaelis-Menten rate", example: "v = Vmax * S / (Km + S)" },
+  ],
+  unitRules: [
+    { symbol: "Km", expectedUnit: "mol/L", alternatives: ["mM", "M"] },
+  ],
+};
+
+// ── Oxygen-Balanced Mixotrophy ───────────────────────────────────────────────
+
+const OXYGEN_BALANCED_MIXOTROPHY: DomainTemplate = {
+  modelType: "oxygen_balanced_mixotrophy",
+  displayName: "Oxygen-Balanced Mixotrophy",
+  description:
+    "Microalgae mixotrophy model coupling light-driven growth, acetate uptake, dissolved oxygen control, and gas-liquid O2/CO2 balances.",
+  expectedVariables: [
+    { symbol: "X", name: "Biomass concentration", unit: "g/L", required: true },
+    { symbol: "S_ac", name: "Acetate concentration", unit: "g/L", required: true },
+    { symbol: "DO", name: "Dissolved oxygen", unit: "% or g/L", required: true },
+    { symbol: "CO2", name: "Dissolved CO2 or TIC", unit: "mol/L", required: true },
+  ],
+  expectedParameters: [
+    { symbol: "D", name: "Dilution rate", unit: "1/h", required: true },
+    { symbol: "kLa", name: "Gas-liquid mass transfer coefficient", unit: "1/h", required: false },
+  ],
+  checklistItems: [
+    {
+      id: "mixotrophy-light",
+      category: "equation",
+      description: "Autotrophic light-growth relation is present.",
+      severity: "critical",
+    },
+    {
+      id: "mixotrophy-acetate",
+      category: "equation",
+      description: "Heterotrophic acetate uptake relation is present.",
+      severity: "critical",
+    },
+    {
+      id: "mixotrophy-controller",
+      category: "parameter",
+      description: "DO control setpoint and controller parameters are reported if closed-loop control is claimed.",
+      severity: "critical",
+    },
+  ],
+  odeHints: [
+    { description: "Biomass balance", example: "dX/dt = (mu_auto + mu_het - D) * X" },
+    { description: "Oxygen balance", example: "dDO/dt = kLa*(DO* - DO) + photosynthesis - respiration" },
+  ],
+  unitRules: [],
+};
+
+// ── Unknown ──────────────────────────────────────────────────────────────────
+
+const UNKNOWN: DomainTemplate = {
+  modelType: "unknown",
+  displayName: "Unknown Model Type",
+  description:
+    "No specific canonical model type was detected. The general good-practice checklist below applies to any dynamic model scaffold.",
   expectedVariables: [],
   expectedParameters: [],
   checklistItems: [
@@ -571,17 +681,20 @@ const GENERIC_ODE: DomainTemplate = {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 const TEMPLATES: Record<ModelType, DomainTemplate> = {
-  chemostat: CHEMOSTAT,
-  batch_reactor: BATCH_REACTOR,
+  monod_chemostat: CHEMOSTAT,
   fed_batch: FED_BATCH,
+  batch_culture: BATCH_REACTOR,
   cstr: CSTR,
-  gas_liquid_transfer: GAS_LIQUID_TRANSFER,
-  microalgae_pbr: MICROALGAE_PBR,
-  generic_ode: GENERIC_ODE,
+  pfr: PFR,
+  enzyme_kinetics: ENZYME_KINETICS,
+  gas_liquid: GAS_LIQUID_TRANSFER,
+  microalgae_photobioreactor: MICROALGAE_PBR,
+  oxygen_balanced_mixotrophy: OXYGEN_BALANCED_MIXOTROPHY,
+  unknown: UNKNOWN,
 };
 
-export function getDomainTemplate(modelType: ModelType): DomainTemplate {
-  return TEMPLATES[modelType];
+export function getDomainTemplate(modelType: ModelType | string): DomainTemplate {
+  return TEMPLATES[normalizeModelType(modelType)];
 }
 
 export function getAllTemplates(): DomainTemplate[] {

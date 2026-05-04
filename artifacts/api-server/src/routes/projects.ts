@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, asc, sql, or, isNull } from "drizzle-orm";
+import { eq, desc, asc, sql, or } from "drizzle-orm";
 import {
   db,
   projectsTable,
@@ -30,32 +30,14 @@ import {
   ExtractionProviderError,
 } from "../lib/extractor";
 import { classifyModel } from "@workspace/domain-classifier";
+import { normalizeExtractionModelTypes } from "../lib/model-type-compat";
+import { canMutateProject, canViewProject } from "../lib/access-control";
 
 const router: IRouter = Router();
 const CreateExtractionBodyLocal = z.object({
   provider: z.enum(["auto", "mock", "openai", "gemini", "ollama", "rule_based"]).optional(),
   sourceDocumentId: z.number().int().positive().optional(),
 });
-
-// ---------- access helpers ----------
-
-/** Returns true if the requesting user can VIEW the project. */
-function canView(
-  project: { ownerId: string | null; visibility: string },
-  userId: string | undefined,
-): boolean {
-  if (project.visibility === "public" || project.ownerId === null) return true;
-  return project.ownerId === userId;
-}
-
-/** Returns true if the requesting user can MUTATE the project. */
-function canMutate(
-  project: { ownerId: string | null },
-  userId: string | undefined,
-): boolean {
-  if (project.ownerId === null) return true; // legacy projects are world-editable
-  return !!userId && project.ownerId === userId;
-}
 
 // ---------- helpers ----------
 
@@ -89,7 +71,13 @@ async function loadModelCard(extractionId: number) {
       .orderBy(asc(assumptionsTable.ordinal), asc(assumptionsTable.id)),
   ]);
 
-  return { extraction, equations, variables, parameters, assumptions };
+  return {
+    extraction: normalizeExtractionModelTypes(extraction),
+    equations,
+    variables,
+    parameters,
+    assumptions,
+  };
 }
 
 // ---------- projects ----------
@@ -99,13 +87,9 @@ router.get("/projects", async (req, res): Promise<void> => {
   const visibilityFilter = userId
     ? or(
         eq(projectsTable.visibility, "public"),
-        isNull(projectsTable.ownerId),
         eq(projectsTable.ownerId, userId),
       )
-    : or(
-        eq(projectsTable.visibility, "public"),
-        isNull(projectsTable.ownerId),
-      );
+    : eq(projectsTable.visibility, "public");
 
   const projects = await db
     .select()
@@ -184,7 +168,7 @@ router.get("/projects/:projectId", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  if (!canView(project, req.user?.id)) {
+  if (!canViewProject(project, req.user?.id)) {
     res.status(403).json({ error: "Access denied" });
     return;
   }
@@ -204,6 +188,10 @@ router.get("/projects/:projectId", async (req, res): Promise<void> => {
       status: extractionsTable.status,
       modelCardTitle: extractionsTable.modelCardTitle,
       domain: extractionsTable.domain,
+      modelType: extractionsTable.modelType,
+      modelTypeConfidence: extractionsTable.modelTypeConfidence,
+      modelTypeMatchedKeywords: extractionsTable.modelTypeMatchedKeywords,
+      modelTypeOverride: extractionsTable.modelTypeOverride,
       createdAt: extractionsTable.createdAt,
       updatedAt: extractionsTable.updatedAt,
     })
@@ -211,7 +199,11 @@ router.get("/projects/:projectId", async (req, res): Promise<void> => {
     .where(eq(extractionsTable.projectId, project.id))
     .orderBy(desc(extractionsTable.createdAt));
 
-  res.json({ ...project, sourceDocuments, extractions });
+  res.json({
+    ...project,
+    sourceDocuments,
+    extractions: extractions.map(normalizeExtractionModelTypes),
+  });
 });
 
 router.delete("/projects/:projectId", async (req, res): Promise<void> => {
@@ -221,14 +213,19 @@ router.delete("/projects/:projectId", async (req, res): Promise<void> => {
     return;
   }
   const [project] = await db
-    .select({ id: projectsTable.id, ownerId: projectsTable.ownerId })
+    .select({
+      id: projectsTable.id,
+      ownerId: projectsTable.ownerId,
+      name: projectsTable.name,
+      visibility: projectsTable.visibility,
+    })
     .from(projectsTable)
     .where(eq(projectsTable.id, params.data.projectId));
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  if (!canMutate(project, req.user?.id)) {
+  if (!canMutateProject(project, req.user?.id)) {
     res.status(403).json({ error: "Access denied" });
     return;
   }
@@ -257,7 +254,7 @@ router.patch(
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    if (!canMutate(project, req.user?.id)) {
+    if (!canMutateProject(project, req.user?.id)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -294,7 +291,7 @@ router.post(
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    if (!canMutate(project, req.user?.id)) {
+    if (!canMutateProject(project, req.user?.id)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -349,7 +346,7 @@ router.post(
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    if (!canMutate(project, req.user?.id)) {
+    if (!canMutateProject(project, req.user?.id)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -384,8 +381,13 @@ router.post(
     //    (or undefined to use the auto fallback chain).
     let extracted;
     try {
-      const openaiApiKey = req.header("x-openai-api-key") ?? undefined;
-      const geminiApiKey = req.header("x-gemini-api-key") ?? undefined;
+      const allowRuntimeProviderKeys = process.env.NODE_ENV !== "production";
+      const openaiApiKey = allowRuntimeProviderKeys
+        ? req.header("x-openai-api-key") ?? undefined
+        : undefined;
+      const geminiApiKey = allowRuntimeProviderKeys
+        ? req.header("x-gemini-api-key") ?? undefined
+        : undefined;
       const ollamaBaseUrl = req.header("x-ollama-base-url") ?? undefined;
       const ollamaModel = req.header("x-ollama-model") ?? undefined;
       extracted = await runExtraction(
@@ -418,7 +420,7 @@ router.post(
 
     // M19: Run the rule-based domain classifier against the source content and
     // extracted fields. This is a fast (~1 ms) pure in-process operation with
-    // no external calls. Never throws; defaults to "generic_ode" on failure.
+    // no external calls. Never throws; defaults to "unknown" on failure.
     const classification = classifyModel({
       sourceText: source.content,
       title: extracted.result.paper_title_or_topic,
@@ -536,7 +538,7 @@ router.get(
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    if (!canView(project, req.user?.id)) {
+    if (!canViewProject(project, req.user?.id)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }
@@ -577,7 +579,7 @@ router.get(
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    if (!canView(project, req.user?.id)) {
+    if (!canViewProject(project, req.user?.id)) {
       res.status(403).json({ error: "Access denied" });
       return;
     }

@@ -54,7 +54,7 @@ export type ModelCardExtraction = {
    * @nullable
    */
   tokenUsage: ModelCardExtractionTokenUsage;
-  /** Auto-detected model type from the rule-based domain classifier. "generic_ode" is the safe default for unknown models and legacy rows. */
+  /** Auto-detected canonical model type from the rule-based domain classifier. Legacy rows are mapped on read; "unknown" is the safe default. */
   modelType: ModelCardExtractionModelType;
   /** Classifier confidence score in [0, 1]. Computed as score / (score + 10) from keyword evidence. 0 means no domain keywords were found. */
   modelTypeConfidence: number;

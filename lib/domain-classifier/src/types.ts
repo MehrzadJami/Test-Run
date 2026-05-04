@@ -8,32 +8,71 @@
 // ── Model type enum ──────────────────────────────────────────────────────────
 
 export type ModelType =
+  | "monod_chemostat"
+  | "fed_batch"
+  | "batch_culture"
+  | "cstr"
+  | "pfr"
+  | "enzyme_kinetics"
+  | "gas_liquid"
+  | "microalgae_photobioreactor"
+  | "oxygen_balanced_mixotrophy"
+  | "unknown";
+
+export const MODEL_TYPES = [
+  "monod_chemostat",
+  "fed_batch",
+  "batch_culture",
+  "cstr",
+  "pfr",
+  "enzyme_kinetics",
+  "gas_liquid",
+  "microalgae_photobioreactor",
+  "oxygen_balanced_mixotrophy",
+  "unknown",
+] as const satisfies readonly ModelType[];
+
+export type LegacyModelType =
   | "chemostat"
   | "batch_reactor"
-  | "fed_batch"
-  | "cstr"
   | "gas_liquid_transfer"
   | "microalgae_pbr"
   | "generic_ode";
 
-export const MODEL_TYPES: ModelType[] = [
-  "chemostat",
-  "batch_reactor",
-  "fed_batch",
-  "cstr",
-  "gas_liquid_transfer",
-  "microalgae_pbr",
-  "generic_ode",
-];
+export const LEGACY_MODEL_TYPE_MAP: Record<LegacyModelType, ModelType> = {
+  chemostat: "monod_chemostat",
+  batch_reactor: "batch_culture",
+  gas_liquid_transfer: "gas_liquid",
+  microalgae_pbr: "microalgae_photobioreactor",
+  generic_ode: "unknown",
+};
+
+export function normalizeModelType(value: unknown): ModelType {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/-]+/g, "_");
+
+  if ((MODEL_TYPES as readonly string[]).includes(normalized)) {
+    return normalized as ModelType;
+  }
+  if (normalized in LEGACY_MODEL_TYPE_MAP) {
+    return LEGACY_MODEL_TYPE_MAP[normalized as LegacyModelType];
+  }
+  return "unknown";
+}
 
 export const MODEL_TYPE_DISPLAY_NAMES: Record<ModelType, string> = {
-  chemostat: "Chemostat / CSTBR",
-  batch_reactor: "Batch Reactor",
+  monod_chemostat: "Monod Chemostat",
   fed_batch: "Fed-Batch Reactor",
-  cstr: "CSTR (Chemical)",
-  gas_liquid_transfer: "Gas-Liquid / O₂ Transfer",
-  microalgae_pbr: "Microalgae / PBR",
-  generic_ode: "Generic ODE Model",
+  batch_culture: "Batch Culture",
+  cstr: "CSTR",
+  pfr: "PFR",
+  enzyme_kinetics: "Enzyme Kinetics",
+  gas_liquid: "Gas-Liquid",
+  microalgae_photobioreactor: "Microalgae Photobioreactor",
+  oxygen_balanced_mixotrophy: "Oxygen-Balanced Mixotrophy",
+  unknown: "Unknown Model Type",
 };
 
 // ── Classifier I/O ───────────────────────────────────────────────────────────
@@ -60,7 +99,7 @@ export interface ClassificationInput {
 }
 
 export interface ClassificationResult {
-  /** Winning model type. "generic_ode" is used as the safe default. */
+  /** Winning canonical model type. "unknown" is the safe default. */
   modelType: ModelType;
   /**
    * Normalised confidence in [0, 1]. Computed as score / (score + 10).

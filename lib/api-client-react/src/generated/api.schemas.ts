@@ -509,19 +509,22 @@ export const ModelCardExtractionRepairStatus = {
 export type ModelCardExtractionTokenUsage = { [key: string]: unknown } | null;
 
 /**
- * Auto-detected model type from the rule-based domain classifier. "generic_ode" is the safe default for unknown models and legacy rows.
+ * Auto-detected canonical model type from the rule-based domain classifier. Legacy rows are mapped on read; "unknown" is the safe default.
  */
 export type ModelCardExtractionModelType =
   (typeof ModelCardExtractionModelType)[keyof typeof ModelCardExtractionModelType];
 
 export const ModelCardExtractionModelType = {
-  chemostat: "chemostat",
-  batch_reactor: "batch_reactor",
+  monod_chemostat: "monod_chemostat",
   fed_batch: "fed_batch",
+  batch_culture: "batch_culture",
   cstr: "cstr",
-  gas_liquid_transfer: "gas_liquid_transfer",
-  microalgae_pbr: "microalgae_pbr",
-  generic_ode: "generic_ode",
+  pfr: "pfr",
+  enzyme_kinetics: "enzyme_kinetics",
+  gas_liquid: "gas_liquid",
+  microalgae_photobioreactor: "microalgae_photobioreactor",
+  oxygen_balanced_mixotrophy: "oxygen_balanced_mixotrophy",
+  unknown: "unknown",
 } as const;
 
 /**
@@ -533,13 +536,16 @@ export type ModelCardExtractionModelTypeOverride =
   | null;
 
 export const ModelCardExtractionModelTypeOverride = {
-  chemostat: "chemostat",
-  batch_reactor: "batch_reactor",
+  monod_chemostat: "monod_chemostat",
   fed_batch: "fed_batch",
+  batch_culture: "batch_culture",
   cstr: "cstr",
-  gas_liquid_transfer: "gas_liquid_transfer",
-  microalgae_pbr: "microalgae_pbr",
-  generic_ode: "generic_ode",
+  pfr: "pfr",
+  enzyme_kinetics: "enzyme_kinetics",
+  gas_liquid: "gas_liquid",
+  microalgae_photobioreactor: "microalgae_photobioreactor",
+  oxygen_balanced_mixotrophy: "oxygen_balanced_mixotrophy",
+  unknown: "unknown",
 } as const;
 
 export type ModelCardExtraction = {
@@ -582,7 +588,7 @@ export type ModelCardExtraction = {
    * @nullable
    */
   tokenUsage: ModelCardExtractionTokenUsage;
-  /** Auto-detected model type from the rule-based domain classifier. "generic_ode" is the safe default for unknown models and legacy rows. */
+  /** Auto-detected canonical model type from the rule-based domain classifier. Legacy rows are mapped on read; "unknown" is the safe default. */
   modelType: ModelCardExtractionModelType;
   /** Classifier confidence score in [0, 1]. Computed as score / (score + 10) from keyword evidence. 0 means no domain keywords were found. */
   modelTypeConfidence: number;

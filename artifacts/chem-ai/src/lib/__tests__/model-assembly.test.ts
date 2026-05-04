@@ -199,7 +199,7 @@ function abiusiLikeInput(): ModelAssemblyInput {
         },
       ],
       model_card: {
-        model_type: "oxygen-balanced mixotrophic photobioreactor",
+        model_type: "oxygen_balanced_mixotrophy",
         inputs: ["Ac_in", "PFD", "DO_set"],
         outputs: ["X", "S_ac", "DO"],
         control_variables: ["D", "DO_set"],
@@ -328,9 +328,19 @@ describe("analyzeModelAssembly", () => {
   it("detects an oxygen-balanced mixotrophic photobioreactor target", () => {
     const report = analyzeModelAssembly(abiusiLikeInput());
 
-    expect(report.target_model_type).toBe(
-      "Oxygen-balanced mixotrophic photobioreactor model",
-    );
+    expect(report.target_model_type).toBe("oxygen_balanced_mixotrophy");
+  });
+
+  it("maps legacy raw model_type values to canonical target model types", () => {
+    const input = monodChemostatInput();
+    input.raw = {
+      ...input.raw,
+      model_type: "chemostat",
+    };
+
+    const report = analyzeModelAssembly(input);
+
+    expect(report.target_model_type).toBe("monod_chemostat");
   });
 
   it("marks the Abiusi-like model as partial and scaffold-only", () => {
@@ -418,7 +428,7 @@ describe("analyzeModelAssembly", () => {
       (item) => item.severity === "critical",
     ).length;
 
-    expect(monodReport.target_model_type).toBe("Chemostat / continuous bioreactor model");
+    expect(monodReport.target_model_type).toBe("monod_chemostat");
     expect(monodReport.assembly_status).toBe("partial");
     expect(monodReport.assembly_status).not.toBe("insufficient");
     expect(monodReport.can_generate_scaffold).toBe(true);

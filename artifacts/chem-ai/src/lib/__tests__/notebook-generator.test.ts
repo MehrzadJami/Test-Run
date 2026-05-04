@@ -254,7 +254,7 @@ describe("generateJupyterNotebook", () => {
         limitations: [],
         model_card: {
           short_summary: "Test summary",
-          model_type: "chemostat",
+          model_type: "monod_chemostat",
           inputs: ["S"],
           outputs: ["X"],
           control_variables: ["D"],

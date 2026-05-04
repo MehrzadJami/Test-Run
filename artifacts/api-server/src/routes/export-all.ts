@@ -10,6 +10,8 @@ import {
   parametersTable,
   assumptionsTable,
 } from "@workspace/db";
+import { isAdminUser, isFullExportEnabled } from "../lib/access-control";
+import { normalizeExtractionModelTypes } from "../lib/model-type-compat";
 
 const router: IRouter = Router();
 
@@ -38,6 +40,21 @@ const router: IRouter = Router();
  * }
  */
 router.get("/export", async (req, res) => {
+  if (!isFullExportEnabled()) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  if (process.env.NODE_ENV === "production") {
+    if (!req.user) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    if (!isAdminUser(req.user)) {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+  }
+
   try {
     const projects = await db
       .select()
@@ -92,7 +109,13 @@ router.get("/export", async (req, res) => {
                     asc(assumptionsTable.id),
                   ),
               ]);
-            return { extraction, equations, variables, parameters, assumptions };
+            return {
+              extraction: normalizeExtractionModelTypes(extraction),
+              equations,
+              variables,
+              parameters,
+              assumptions,
+            };
           }),
         );
 

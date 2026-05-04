@@ -93,6 +93,7 @@ export interface RawModelCardEntry {
 
 export interface RawExtractionInput {
   paper_title_or_topic?: string;
+  model_type?: string;
   system_type?: string;
   process_description?: string;
   state_variables?: RawVarEntry[];

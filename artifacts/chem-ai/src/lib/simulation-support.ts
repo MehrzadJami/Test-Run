@@ -1,3 +1,5 @@
+import { normalizeModelType } from "@workspace/domain-classifier";
+
 export const SIMULATION_UNSUPPORTED_MESSAGE =
   "Simulation for this model type is not yet supported. Use the scaffold/export instead.";
 
@@ -21,16 +23,13 @@ export type SimulationSupportInput = {
 
 const EXPLICIT_UNSUPPORTED = new Set([
   "gas_liquid",
-  "gas_liquid_transfer",
   "oxygen_balanced_mixotrophy",
   "microalgae_photobioreactor",
-  "microalgae_pbr",
   "fed_batch",
   "pfr",
   "cstr",
   "enzyme_kinetics",
   "unknown",
-  "generic_ode",
 ]);
 
 function normalize(value: string | null | undefined): string {
@@ -73,7 +72,7 @@ export function getSupportedSimulationModelType(
     model.modelTypeOverride,
     model.modelType,
     model.systemType,
-  ].map(normalize);
+  ].map(normalizeModelType);
 
   if (candidates.includes("monod_chemostat")) return "monod_chemostat";
   if (candidates.includes("batch_culture")) {

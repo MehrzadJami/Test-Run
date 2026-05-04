@@ -82,8 +82,7 @@ import { EquationsTab } from "@/components/model-card/EquationsTab";
 import { AssumptionsTab } from "@/components/model-card/AssumptionsTab";
 import { AuditTrailTab } from "@/components/model-card/AuditTrailTab";
 import { DomainChecklistTab } from "@/components/model-card/DomainChecklistTab";
-import { MODEL_TYPE_DISPLAY_NAMES, MODEL_TYPES } from "@workspace/domain-classifier";
-import type { ModelType } from "@workspace/domain-classifier";
+import { MODEL_TYPE_DISPLAY_NAMES, normalizeModelType } from "@workspace/domain-classifier";
 
 // ─── Local raw-extraction passthrough types ────────────────────────────────────
 
@@ -142,6 +141,7 @@ type RawModelCard = {
 
 type RawExtraction = {
   paper_title_or_topic?: string;
+  model_type?: string;
   system_type?: string;
   process_description?: string;
   state_variables?: RawStateVariable[];
@@ -801,20 +801,22 @@ function ModelCardDetailInner({
           </Badge>
           {/* M19: Domain model type badge */}
           {(() => {
-            const rawType = extraction.modelTypeOverride ?? extraction.modelType;
-            const effectiveType = (MODEL_TYPES.includes(rawType as ModelType) ? rawType : "generic_ode") as ModelType;
+            const effectiveType = normalizeModelType(
+              extraction.modelTypeOverride ?? extraction.modelType,
+            );
+            const detectedType = normalizeModelType(extraction.modelType);
             const isOverride = !!extraction.modelTypeOverride;
             return (
               <Badge
                 variant="outline"
                 className={`text-[10px] font-mono ${
-                  effectiveType === "generic_ode"
+                  effectiveType === "unknown"
                     ? "text-muted-foreground border-muted-foreground/30"
                     : "text-violet-700 border-violet-400 dark:text-violet-400"
                 }`}
                 title={
                   isOverride
-                    ? `User override — classifier detected: ${MODEL_TYPE_DISPLAY_NAMES[extraction.modelType as ModelType] ?? extraction.modelType}`
+                    ? `User override — classifier detected: ${MODEL_TYPE_DISPLAY_NAMES[detectedType] ?? extraction.modelType}`
                     : `Auto-detected (${Math.round((extraction.modelTypeConfidence ?? 0) * 100)}% confidence)`
                 }
               >
@@ -1241,7 +1243,7 @@ function ModelCardDetailInner({
                     Model Assembly Readiness
                   </CardTitle>
                   <CardDescription className="mt-1">
-                    Target: {assemblyReport.target_model_type}
+                    Target: {MODEL_TYPE_DISPLAY_NAMES[assemblyReport.target_model_type]}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1391,7 +1393,7 @@ function ModelCardDetailInner({
                     Complete This Model
                   </CardTitle>
                   <CardDescription className="mt-1">
-                    Target: {assemblyReport.target_model_type}
+                    Target: {MODEL_TYPE_DISPLAY_NAMES[assemblyReport.target_model_type]}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">

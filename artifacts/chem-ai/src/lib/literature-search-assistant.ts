@@ -1,4 +1,5 @@
 import type { MissingRequirement, ModelAssemblyReport } from "./model-assembly";
+import { MODEL_TYPE_DISPLAY_NAMES } from "@workspace/domain-classifier";
 
 export type LiteratureSourceType =
   | "supporting_information"
@@ -45,10 +46,16 @@ function unique(values: string[]): string[] {
 
 function contextSubject(report: ModelAssemblyReport, context?: LiteratureSearchContext): string {
   if (safe(context?.organismOrMaterial)) return safe(context?.organismOrMaterial);
-  if (/microalgae|photobioreactor|mixotroph/i.test(report.target_model_type)) {
+  if (
+    report.target_model_type === "microalgae_photobioreactor" ||
+    report.target_model_type === "oxygen_balanced_mixotrophy"
+  ) {
     return "microalgae";
   }
-  if (/chemostat|bioreactor/i.test(report.target_model_type)) {
+  if (
+    report.target_model_type === "monod_chemostat" ||
+    report.target_model_type === "gas_liquid"
+  ) {
     return "bioreactor";
   }
   return "chemical engineering model";
@@ -73,7 +80,7 @@ function inferSourceType(missing: MissingRequirement): LiteratureSourceType {
 }
 
 function genericSourceQuery(report: ModelAssemblyReport, missing: MissingRequirement): string {
-  const model = report.target_model_type.replace(/\//g, " ").replace(/\s+/g, " ").trim();
+  const model = MODEL_TYPE_DISPLAY_NAMES[report.target_model_type];
   return `${model} ${missing.item} ${missing.suggested_source.replace(/_/g, " ")}`;
 }
 

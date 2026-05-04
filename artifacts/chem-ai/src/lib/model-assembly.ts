@@ -14,6 +14,7 @@ import type {
   AnalysisVariable,
   RawExtraction,
 } from "./reproducibility";
+import { normalizeModelType, type ModelType } from "@workspace/domain-classifier";
 
 export type AssemblyStatus = "complete" | "partial" | "insufficient";
 export type AssemblyItemType =
@@ -64,7 +65,7 @@ export interface MissingRequirement {
 
 export interface ModelAssemblyReport {
   assembly_status: AssemblyStatus;
-  target_model_type: string;
+  target_model_type: ModelType;
   can_generate_runnable_model: boolean;
   can_generate_scaffold: boolean;
   available_from_current_source: AvailableAssemblyItem[];
@@ -178,6 +179,7 @@ function rawTextParts(raw: RawExtraction | null | undefined): string[] {
   if (!raw) return [];
   return [
     raw.paper_title_or_topic,
+    raw.model_type,
     raw.system_type,
     raw.process_description,
     raw.model_card?.short_summary,
@@ -263,7 +265,10 @@ function missingInfoCorpus(input: ModelAssemblyInput): string {
     .toLowerCase();
 }
 
-function detectTargetModelType(corpus: string): string {
+function detectTargetModelType(input: ModelAssemblyInput, corpus: string): ModelType {
+  const explicit = normalizeModelType(input.raw?.model_type);
+  if (explicit !== "unknown") return explicit;
+
   const hasOxygenBalance = /\b(do|dissolved oxygen|o2|oxygen)\b/.test(corpus);
   const hasAcetate = /\bacetate\b|\bac[-_ ]?in\b|\bch3coo/.test(corpus);
   const hasPhoto = /\bphoto|photobioreactor|microalgae|light|pfd|irradiance|autotroph/.test(
@@ -272,19 +277,19 @@ function detectTargetModelType(corpus: string): string {
   const hasMixotrophy = /\bmixotroph|heterotroph|autotroph/.test(corpus);
 
   if (hasOxygenBalance && hasAcetate && hasPhoto && hasMixotrophy) {
-    return "Oxygen-balanced mixotrophic photobioreactor model";
+    return "oxygen_balanced_mixotrophy";
   }
-  if (hasPhoto) return "Microalgae / photobioreactor model";
+  if (hasPhoto) return "microalgae_photobioreactor";
   if (/\bkla\b|\bhenry\b|\bgas[- ]?liquid\b|\bo2\b|\bco2\b/.test(corpus)) {
-    return "Gas-liquid O2/CO2 transfer model";
+    return "gas_liquid";
   }
   if (hasAcetate || hasMixotrophy) {
-    return "Acetate-fed heterotrophy/autotrophy model";
+    return "oxygen_balanced_mixotrophy";
   }
   if (/\bchemostat\b|\bcontinuous\b|\bdilution rate\b|\bd\s*=/.test(corpus)) {
-    return "Chemostat / continuous bioreactor model";
+    return "monod_chemostat";
   }
-  return "Generic dynamic model";
+  return "unknown";
 }
 
 function symbolText(symbol: string): string {
@@ -793,26 +798,35 @@ function deriveStatus(
 
 export function analyzeModelAssembly(input: ModelAssemblyInput): ModelAssemblyReport {
   const corpus = buildCorpus(input);
-  const targetModelType = detectTargetModelType(corpus);
+  const targetModelType = detectTargetModelType(input, corpus);
   const available = buildAvailableItems(input);
   const missing: MissingRequirement[] = [];
   const missingSeen = new Set<string>();
 
   addGeneralDynamicChecks(input, corpus, missing, missingSeen);
 
-  if (/chemostat|continuous bioreactor|oxygen-balanced|mixotrophic/.test(lower(targetModelType))) {
+  if (
+    targetModelType === "monod_chemostat" ||
+    targetModelType === "oxygen_balanced_mixotrophy"
+  ) {
     addChemostatChecks(input, missing, missingSeen);
   }
-  if (/photobioreactor|microalgae|oxygen-balanced/.test(lower(targetModelType))) {
+  if (
+    targetModelType === "microalgae_photobioreactor" ||
+    targetModelType === "oxygen_balanced_mixotrophy"
+  ) {
     addPhotobioreactorChecks(input, corpus, missing, missingSeen);
   }
-  if (/gas-liquid|o2\/co2|oxygen-balanced/.test(lower(targetModelType))) {
+  if (
+    targetModelType === "gas_liquid" ||
+    targetModelType === "oxygen_balanced_mixotrophy"
+  ) {
     addGasTransferChecks(corpus, missing, missingSeen);
   }
-  if (/acetate|heterotrophy|autotrophy|mixotrophic|oxygen-balanced/.test(lower(targetModelType))) {
+  if (targetModelType === "oxygen_balanced_mixotrophy") {
     addAcetateMetabolismChecks(input, missing, missingSeen);
   }
-  if (/oxygen-balanced|mixotrophic/.test(lower(targetModelType))) {
+  if (targetModelType === "oxygen_balanced_mixotrophy") {
     addOxygenBalancedMixotrophyChecks(input, corpus, missing, missingSeen);
   }
 

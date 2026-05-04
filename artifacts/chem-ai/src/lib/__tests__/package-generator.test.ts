@@ -40,7 +40,7 @@ function baseUnitReport(): UnitCheckReport {
 function baseAssemblyReport(): ModelAssemblyReport {
   return {
     assembly_status: "partial",
-    target_model_type: "Chemostat / continuous bioreactor model",
+    target_model_type: "monod_chemostat",
     can_generate_runnable_model: false,
     can_generate_scaffold: true,
     available_from_current_source: [

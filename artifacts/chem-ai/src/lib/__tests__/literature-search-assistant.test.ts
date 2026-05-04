@@ -20,7 +20,7 @@ function missing(overrides: Partial<MissingRequirement>): MissingRequirement {
 function report(missingRequirements: MissingRequirement[]): ModelAssemblyReport {
   return {
     assembly_status: "partial",
-    target_model_type: "Oxygen-balanced mixotrophic photobioreactor model",
+    target_model_type: "oxygen_balanced_mixotrophy",
     can_generate_runnable_model: false,
     can_generate_scaffold: true,
     available_from_current_source: [],

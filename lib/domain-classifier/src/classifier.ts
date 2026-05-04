@@ -6,7 +6,7 @@
  *     listing the matched keywords.
  *  2. Deterministic — same input always produces the same result.
  *  3. Conservative — never claims high confidence unless there is strong
- *     multi-field keyword evidence. Defaults to "generic_ode".
+ *     multi-field keyword evidence. Defaults to "unknown".
  *  4. No ML dependency — pure string matching, runs in ≤1 ms even on large
  *     source documents.
  *
@@ -18,7 +18,7 @@
  *  - Sum the weighted hit counts.
  *  - The type with the highest non-zero score wins.
  *  - Confidence = score / (score + 10)  [soft sigmoid; 0 → 0, ∞ → 1].
- *  - If all scores are 0 → "generic_ode" with confidence 0.
+ *  - If all scores are 0 → "unknown" with confidence 0.
  */
 
 import type {
@@ -41,8 +41,8 @@ interface KeywordRule {
   weight: number;
 }
 
-const RULES: Record<Exclude<ModelType, "generic_ode">, KeywordRule[]> = {
-  chemostat: [
+const RULES: Record<Exclude<ModelType, "unknown">, KeywordRule[]> = {
+  monod_chemostat: [
     { keyword: "chemostat", weight: 3 },
     { keyword: "continuous culture", weight: 3 },
     { keyword: "cstbr", weight: 3 },
@@ -62,7 +62,7 @@ const RULES: Record<Exclude<ModelType, "generic_ode">, KeywordRule[]> = {
     { keyword: "biomass washout", weight: 3 },
     { keyword: "dilution", weight: 1 },
   ],
-  batch_reactor: [
+  batch_culture: [
     { keyword: "batch reactor", weight: 3 },
     { keyword: "batch culture", weight: 3 },
     { keyword: "batch fermentation", weight: 3 },
@@ -113,7 +113,26 @@ const RULES: Record<Exclude<ModelType, "generic_ode">, KeywordRule[]> = {
     { keyword: "rate law", weight: 1 },
     { keyword: "chemical reactor", weight: 2 },
   ],
-  gas_liquid_transfer: [
+  pfr: [
+    { keyword: "pfr", weight: 3 },
+    { keyword: "plug-flow", weight: 3 },
+    { keyword: "plug flow", weight: 3 },
+    { keyword: "tubular reactor", weight: 3 },
+    { keyword: "axial coordinate", weight: 3 },
+    { keyword: "coordinate z", weight: 3 },
+    { keyword: "spatial coordinate", weight: 2 },
+    { keyword: "axial dispersion", weight: 2 },
+  ],
+  enzyme_kinetics: [
+    { keyword: "enzyme", weight: 3 },
+    { keyword: "michaelis", weight: 3 },
+    { keyword: "vmax", weight: 3 },
+    { keyword: "km", weight: 2 },
+    { keyword: "substrate product", weight: 2 },
+    { keyword: "enzyme kinetics", weight: 3 },
+    { keyword: "competitive inhibition", weight: 2 },
+  ],
+  gas_liquid: [
     { keyword: "kla", weight: 3 },
     { keyword: "k_la", weight: 3 },
     { keyword: "oxygen transfer", weight: 3 },
@@ -133,7 +152,7 @@ const RULES: Record<Exclude<ModelType, "generic_ode">, KeywordRule[]> = {
     { keyword: "do probe", weight: 2 },
     { keyword: "mass transfer coefficient", weight: 2 },
   ],
-  microalgae_pbr: [
+  microalgae_photobioreactor: [
     { keyword: "microalgae", weight: 3 },
     { keyword: "photobioreactor", weight: 3 },
     { keyword: "pbr", weight: 2 },
@@ -152,6 +171,18 @@ const RULES: Record<Exclude<ModelType, "generic_ode">, KeywordRule[]> = {
     { keyword: "light saturation", weight: 3 },
     { keyword: "growth medium", weight: 1 },
     { keyword: "pruvost", weight: 3 },
+  ],
+  oxygen_balanced_mixotrophy: [
+    { keyword: "mixotrophy", weight: 3 },
+    { keyword: "mixotrophic", weight: 3 },
+    { keyword: "acetate", weight: 2 },
+    { keyword: "acetic acid", weight: 2 },
+    { keyword: "do control", weight: 3 },
+    { keyword: "do-controlled", weight: 3 },
+    { keyword: "dissolved oxygen control", weight: 3 },
+    { keyword: "oxygen-balanced", weight: 3 },
+    { keyword: "heterotrophic acetate", weight: 3 },
+    { keyword: "autotrophic growth", weight: 2 },
   ],
 };
 
@@ -201,7 +232,7 @@ function scoreField(
 /**
  * Classify the model type from available extraction fields.
  *
- * Never throws. Returns "generic_ode" with confidence 0 when no evidence is
+ * Never throws. Returns "unknown" with confidence 0 when no evidence is
  * found — callers must NOT treat this as an error.
  */
 export function classifyModel(
@@ -211,7 +242,7 @@ export function classifyModel(
   const allMatchedKeywords: Set<string> = new Set();
 
   for (const [modelType, rules] of Object.entries(RULES) as [
-    Exclude<ModelType, "generic_ode">,
+    Exclude<ModelType, "unknown">,
     KeywordRule[],
   ][]) {
     const matched: Set<string> = new Set();
@@ -253,7 +284,7 @@ export function classifyModel(
   }
 
   // Find the winning type (highest score, ties broken by insertion order).
-  let bestType: ModelType = "generic_ode";
+  let bestType: ModelType = "unknown";
   let bestScore = 0;
 
   for (const [type, score] of Object.entries(scores) as [

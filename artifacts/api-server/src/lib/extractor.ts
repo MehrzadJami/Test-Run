@@ -48,6 +48,7 @@ import { OllamaPaperUnderstandingProvider } from "./providers/ollama-paper-under
 import { RuleBasedProvider } from "./providers/rule-based-provider";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./providers/prompt";
 import { logger } from "./logger";
+import { normalizeModelType } from "@workspace/domain-classifier";
 
 // ---------- Public errors ----------
 
@@ -272,6 +273,18 @@ function tryRepairJson(raw: unknown): unknown {
   return null;
 }
 
+function normalizeCandidateModelType(candidate: unknown): unknown {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return candidate;
+  }
+  const typed = candidate as Record<string, unknown>;
+  if (typeof typed["model_type"] !== "string") return candidate;
+  return {
+    ...typed,
+    model_type: normalizeModelType(typed["model_type"]),
+  };
+}
+
 // ---------- Provider factory ----------
 
 /**
@@ -459,7 +472,8 @@ export async function runExtraction(
   }
 
   // First validation attempt.
-  let parsed = ExtractionResultSchema.safeParse(candidate);
+  let normalizedCandidate = normalizeCandidateModelType(candidate);
+  let parsed = ExtractionResultSchema.safeParse(normalizedCandidate);
   let repairStatus: AuditData["repairStatus"] = "not_needed";
   let validationErrors: string | null = null;
 
@@ -472,7 +486,8 @@ export async function runExtraction(
         { provider: provider.name },
         "First parse failed — attempting JSON repair pass",
       );
-      parsed = ExtractionResultSchema.safeParse(repaired);
+      normalizedCandidate = normalizeCandidateModelType(repaired);
+      parsed = ExtractionResultSchema.safeParse(normalizedCandidate);
       if (parsed.success) {
         repairStatus = "repaired";
       } else {

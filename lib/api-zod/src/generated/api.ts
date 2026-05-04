@@ -287,16 +287,19 @@ export const GetModelCardByProjectResponse = zod.object({
       ),
     modelType: zod
       .enum([
-        "chemostat",
-        "batch_reactor",
+        "monod_chemostat",
         "fed_batch",
+        "batch_culture",
         "cstr",
-        "gas_liquid_transfer",
-        "microalgae_pbr",
-        "generic_ode",
+        "pfr",
+        "enzyme_kinetics",
+        "gas_liquid",
+        "microalgae_photobioreactor",
+        "oxygen_balanced_mixotrophy",
+        "unknown",
       ])
       .describe(
-        'Auto-detected model type from the rule-based domain classifier. \"generic_ode\" is the safe default for unknown models and legacy rows.',
+        'Auto-detected canonical model type from the rule-based domain classifier. Legacy rows are mapped on read; \"unknown\" is the safe default.',
       ),
     modelTypeConfidence: zod
       .number()
@@ -310,13 +313,16 @@ export const GetModelCardByProjectResponse = zod.object({
       ),
     modelTypeOverride: zod
       .union([
-        zod.literal("chemostat"),
-        zod.literal("batch_reactor"),
+        zod.literal("monod_chemostat"),
         zod.literal("fed_batch"),
+        zod.literal("batch_culture"),
         zod.literal("cstr"),
-        zod.literal("gas_liquid_transfer"),
-        zod.literal("microalgae_pbr"),
-        zod.literal("generic_ode"),
+        zod.literal("pfr"),
+        zod.literal("enzyme_kinetics"),
+        zod.literal("gas_liquid"),
+        zod.literal("microalgae_photobioreactor"),
+        zod.literal("oxygen_balanced_mixotrophy"),
+        zod.literal("unknown"),
         zod.literal(null),
       ])
       .nullable()
@@ -501,16 +507,19 @@ export const ExportProjectResponse = zod.object({
           ),
         modelType: zod
           .enum([
-            "chemostat",
-            "batch_reactor",
+            "monod_chemostat",
             "fed_batch",
+            "batch_culture",
             "cstr",
-            "gas_liquid_transfer",
-            "microalgae_pbr",
-            "generic_ode",
+            "pfr",
+            "enzyme_kinetics",
+            "gas_liquid",
+            "microalgae_photobioreactor",
+            "oxygen_balanced_mixotrophy",
+            "unknown",
           ])
           .describe(
-            'Auto-detected model type from the rule-based domain classifier. \"generic_ode\" is the safe default for unknown models and legacy rows.',
+            'Auto-detected canonical model type from the rule-based domain classifier. Legacy rows are mapped on read; \"unknown\" is the safe default.',
           ),
         modelTypeConfidence: zod
           .number()
@@ -524,13 +533,16 @@ export const ExportProjectResponse = zod.object({
           ),
         modelTypeOverride: zod
           .union([
-            zod.literal("chemostat"),
-            zod.literal("batch_reactor"),
+            zod.literal("monod_chemostat"),
             zod.literal("fed_batch"),
+            zod.literal("batch_culture"),
             zod.literal("cstr"),
-            zod.literal("gas_liquid_transfer"),
-            zod.literal("microalgae_pbr"),
-            zod.literal("generic_ode"),
+            zod.literal("pfr"),
+            zod.literal("enzyme_kinetics"),
+            zod.literal("gas_liquid"),
+            zod.literal("microalgae_photobioreactor"),
+            zod.literal("oxygen_balanced_mixotrophy"),
+            zod.literal("unknown"),
             zod.literal(null),
           ])
           .nullable()
@@ -697,16 +709,19 @@ export const GetPublicModelCardResponse = zod.object({
       ),
     modelType: zod
       .enum([
-        "chemostat",
-        "batch_reactor",
+        "monod_chemostat",
         "fed_batch",
+        "batch_culture",
         "cstr",
-        "gas_liquid_transfer",
-        "microalgae_pbr",
-        "generic_ode",
+        "pfr",
+        "enzyme_kinetics",
+        "gas_liquid",
+        "microalgae_photobioreactor",
+        "oxygen_balanced_mixotrophy",
+        "unknown",
       ])
       .describe(
-        'Auto-detected model type from the rule-based domain classifier. \"generic_ode\" is the safe default for unknown models and legacy rows.',
+        'Auto-detected canonical model type from the rule-based domain classifier. Legacy rows are mapped on read; \"unknown\" is the safe default.',
       ),
     modelTypeConfidence: zod
       .number()
@@ -720,13 +735,16 @@ export const GetPublicModelCardResponse = zod.object({
       ),
     modelTypeOverride: zod
       .union([
-        zod.literal("chemostat"),
-        zod.literal("batch_reactor"),
+        zod.literal("monod_chemostat"),
         zod.literal("fed_batch"),
+        zod.literal("batch_culture"),
         zod.literal("cstr"),
-        zod.literal("gas_liquid_transfer"),
-        zod.literal("microalgae_pbr"),
-        zod.literal("generic_ode"),
+        zod.literal("pfr"),
+        zod.literal("enzyme_kinetics"),
+        zod.literal("gas_liquid"),
+        zod.literal("microalgae_photobioreactor"),
+        zod.literal("oxygen_balanced_mixotrophy"),
+        zod.literal("unknown"),
         zod.literal(null),
       ])
       .nullable()

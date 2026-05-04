@@ -1150,17 +1150,20 @@ components:
             modelType:
               type: string
               enum:
-                - chemostat
-                - batch_reactor
+                - monod_chemostat
                 - fed_batch
+                - batch_culture
                 - cstr
-                - gas_liquid_transfer
-                - microalgae_pbr
-                - generic_ode
+                - pfr
+                - enzyme_kinetics
+                - gas_liquid
+                - microalgae_photobioreactor
+                - oxygen_balanced_mixotrophy
+                - unknown
               description: >-
-                Auto-detected model type from the rule-based domain classifier.
-                "generic_ode" is the safe default for unknown models and
-                legacy rows.
+                Auto-detected canonical model type from the rule-based domain
+                classifier. Legacy rows are mapped on read; "unknown" is the
+                safe default.
             modelTypeConfidence:
               type: number
               format: float
@@ -1178,13 +1181,16 @@ components:
             modelTypeOverride:
               type: ["string", "null"]
               enum:
-                - chemostat
-                - batch_reactor
+                - monod_chemostat
                 - fed_batch
+                - batch_culture
                 - cstr
-                - gas_liquid_transfer
-                - microalgae_pbr
-                - generic_ode
+                - pfr
+                - enzyme_kinetics
+                - gas_liquid
+                - microalgae_photobioreactor
+                - oxygen_balanced_mixotrophy
+                - unknown
                 - null
               description: >-
                 User-supplied model type override. When non-null, takes

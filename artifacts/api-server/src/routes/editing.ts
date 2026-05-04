@@ -7,7 +7,7 @@
 //
 // rawExtractionJson is NEVER touched here — it is the immutable AI output.
 
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { eq } from "drizzle-orm";
 import {
   db,
@@ -16,9 +16,15 @@ import {
   equationsTable,
   assumptionsTable,
   extractionsTable,
+  projectsTable,
 } from "@workspace/db";
-import { MODEL_TYPES } from "@workspace/domain-classifier";
+import {
+  LEGACY_MODEL_TYPE_MAP,
+  MODEL_TYPES,
+  normalizeModelType,
+} from "@workspace/domain-classifier";
 import { z } from "zod/v4";
+import { canMutateProject } from "../lib/access-control";
 import {
   PatchVariableParams,
   PatchVariableBody,
@@ -35,6 +41,54 @@ import {
 } from "@workspace/api-zod";
 
 const router: IRouter = Router();
+
+type MutationCheck = "allowed" | "denied" | "not_found";
+
+async function checkExtractionMutationPermission(
+  extractionId: number,
+  userId: string | undefined,
+): Promise<MutationCheck> {
+  const [extraction] = await db
+    .select({
+      id: extractionsTable.id,
+      projectId: extractionsTable.projectId,
+    })
+    .from(extractionsTable)
+    .where(eq(extractionsTable.id, extractionId));
+
+  if (!extraction) return "not_found";
+
+  const [project] = await db
+    .select({
+      id: projectsTable.id,
+      ownerId: projectsTable.ownerId,
+      name: projectsTable.name,
+      visibility: projectsTable.visibility,
+    })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, extraction.projectId));
+
+  if (!project) return "not_found";
+
+  return canMutateProject(project, userId) ? "allowed" : "denied";
+}
+
+async function requireExtractionMutationPermission(
+  res: Response,
+  extractionId: number,
+  userId: string | undefined,
+): Promise<boolean> {
+  const result = await checkExtractionMutationPermission(extractionId, userId);
+  if (result === "not_found") {
+    res.status(404).json({ error: "Extraction not found" });
+    return false;
+  }
+  if (result === "denied") {
+    res.status(403).json({ error: "Access denied" });
+    return false;
+  }
+  return true;
+}
 
 // ─── helper: rebuild description from label+meaning+plaintext ────────────────
 
@@ -72,6 +126,15 @@ router.patch("/variables/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Variable not found" });
     return;
   }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
+    return;
+  }
 
   const originalValue =
     current.editedByUser ? current.originalValue : { ...current };
@@ -104,6 +167,15 @@ router.post("/variables/:id/reset", async (req, res): Promise<void> => {
     .where(eq(variablesTable.id, params.data.id));
   if (!current) {
     res.status(404).json({ error: "Variable not found" });
+    return;
+  }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
     return;
   }
 
@@ -155,6 +227,15 @@ router.patch("/parameters/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Parameter not found" });
     return;
   }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
+    return;
+  }
 
   const originalValue =
     current.editedByUser ? current.originalValue : { ...current };
@@ -187,6 +268,15 @@ router.post("/parameters/:id/reset", async (req, res): Promise<void> => {
     .where(eq(parametersTable.id, params.data.id));
   if (!current) {
     res.status(404).json({ error: "Parameter not found" });
+    return;
+  }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
     return;
   }
 
@@ -237,6 +327,15 @@ router.patch("/equations/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Equation not found" });
     return;
   }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
+    return;
+  }
 
   const originalValue =
     current.editedByUser ? current.originalValue : { ...current };
@@ -276,6 +375,15 @@ router.post("/equations/:id/reset", async (req, res): Promise<void> => {
     .where(eq(equationsTable.id, params.data.id));
   if (!current) {
     res.status(404).json({ error: "Equation not found" });
+    return;
+  }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
     return;
   }
 
@@ -334,6 +442,15 @@ router.patch("/assumptions/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Assumption not found" });
     return;
   }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
+    return;
+  }
 
   const originalValue =
     current.editedByUser ? current.originalValue : { ...current };
@@ -368,6 +485,15 @@ router.post("/assumptions/:id/reset", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Assumption not found" });
     return;
   }
+  if (
+    !(await requireExtractionMutationPermission(
+      res,
+      current.extractionId,
+      req.user?.id,
+    ))
+  ) {
+    return;
+  }
 
   if (!current.editedByUser || !current.originalValue) {
     res.json(current);
@@ -398,10 +524,15 @@ const ModelTypeOverrideParams = z.object({
   extractionId: z.coerce.number().int().positive(),
 });
 
+const ACCEPTED_MODEL_TYPE_OVERRIDES = [
+  ...MODEL_TYPES,
+  ...Object.keys(LEGACY_MODEL_TYPE_MAP),
+] as [string, ...string[]];
+
 const ModelTypeOverrideBody = z.object({
   // null = clear override (revert to classifier result)
   modelTypeOverride: z
-    .enum(MODEL_TYPES as [string, ...string[]])
+    .enum(ACCEPTED_MODEL_TYPE_OVERRIDES)
     .nullable(),
 });
 
@@ -419,11 +550,23 @@ router.patch(
       return;
     }
 
+    if (
+      !(await requireExtractionMutationPermission(
+        res,
+        params.data.extractionId,
+        req.user?.id,
+      ))
+    ) {
+      return;
+    }
+
     const [updated] = await db
       .update(extractionsTable)
       .set({
         modelTypeOverride:
-          body.data.modelTypeOverride as typeof extractionsTable.$inferSelect.modelTypeOverride,
+          body.data.modelTypeOverride == null
+            ? null
+            : normalizeModelType(body.data.modelTypeOverride),
       })
       .where(eq(extractionsTable.id, params.data.extractionId))
       .returning({ id: extractionsTable.id, modelTypeOverride: extractionsTable.modelTypeOverride });

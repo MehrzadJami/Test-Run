@@ -22,6 +22,7 @@ import type {
 import type { ModelAssemblyReport } from "./model-assembly";
 import type { UnitCheckReport } from "./unit-checker";
 import { generateJupyterNotebook } from "./notebook-generator";
+import { MODEL_TYPE_DISPLAY_NAMES } from "@workspace/domain-classifier";
 
 // ─── Public input type ─────────────────────────────────────────────────────────
 
@@ -592,7 +593,9 @@ function makeAssemblyMissingRequirementsMd(report: ModelAssemblyReport): string 
   lines.push("No missing values are invented here; provide another source, assumptions, code, or calibration data before treating the model as runnable.");
   lines.push("");
   lines.push(`**Assembly status:** ${report.assembly_status}`);
-  lines.push(`**Target model type:** ${report.target_model_type}`);
+  lines.push(
+    `**Target model type:** ${MODEL_TYPE_DISPLAY_NAMES[report.target_model_type]} (${report.target_model_type})`,
+  );
   lines.push(`**Runnable model can be generated:** ${report.can_generate_runnable_model ? "yes" : "no"}`);
   lines.push(`**Scaffold can be generated:** ${report.can_generate_scaffold ? "yes" : "no"}`);
   lines.push("");

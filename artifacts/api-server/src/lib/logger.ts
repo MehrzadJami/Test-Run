@@ -7,6 +7,10 @@ export const logger = pino({
   redact: [
     "req.headers.authorization",
     "req.headers.cookie",
+    "req.headers['x-openai-api-key']",
+    "req.headers['x-gemini-api-key']",
+    "*.openaiApiKey",
+    "*.geminiApiKey",
     "res.headers['set-cookie']",
   ],
   ...(isProduction

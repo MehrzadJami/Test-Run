@@ -15,11 +15,14 @@ export type ModelCardExtractionModelTypeOverride =
   | null;
 
 export const ModelCardExtractionModelTypeOverride = {
-  chemostat: "chemostat",
-  batch_reactor: "batch_reactor",
+  monod_chemostat: "monod_chemostat",
   fed_batch: "fed_batch",
+  batch_culture: "batch_culture",
   cstr: "cstr",
-  gas_liquid_transfer: "gas_liquid_transfer",
-  microalgae_pbr: "microalgae_pbr",
-  generic_ode: "generic_ode",
+  pfr: "pfr",
+  enzyme_kinetics: "enzyme_kinetics",
+  gas_liquid: "gas_liquid",
+  microalgae_photobioreactor: "microalgae_photobioreactor",
+  oxygen_balanced_mixotrophy: "oxygen_balanced_mixotrophy",
+  unknown: "unknown",
 } as const;

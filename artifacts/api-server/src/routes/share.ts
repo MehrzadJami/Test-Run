@@ -10,6 +10,7 @@ import {
   assumptionsTable,
 } from "@workspace/db";
 import { GetPublicModelCardParams } from "@workspace/api-zod";
+import { normalizeExtractionModelTypes } from "../lib/model-type-compat";
 
 const router: IRouter = Router();
 
@@ -43,7 +44,7 @@ router.get(
     }
 
     // Only publicly visible projects are accessible via the share endpoint.
-    if (project.visibility !== "public" && project.ownerId !== null) {
+    if (project.visibility !== "public") {
       res.status(403).json({ error: "This model card is not publicly shared" });
       return;
     }
@@ -72,12 +73,12 @@ router.get(
     ]);
 
     // Strip sensitive audit fields before returning public share data.
-    const safeExtraction = {
+    const safeExtraction = normalizeExtractionModelTypes({
       ...extraction,
       systemPrompt: "",
       rawProviderResponse: null,
       promptTemplateSummary: "",
-    };
+    });
 
     res.json({ extraction: safeExtraction, equations, variables, parameters, assumptions });
   },

@@ -47,21 +47,24 @@ export const extractionsTable = pgTable("extractions", {
   validationErrors: text("validation_errors"),
   tokenUsage: jsonb("token_usage"),
   // ── M19: Domain Templates and Model Type Classifier ─────────────────────────
-  // Auto-detected model type from the rule-based domain classifier.
-  // "generic_ode" is the safe default for legacy rows and unknown models.
+  // Auto-detected canonical model type from the rule-based domain classifier.
+  // "unknown" is the safe default for unknown models.
   modelType: text("model_type", {
     enum: [
-      "chemostat",
-      "batch_reactor",
+      "monod_chemostat",
       "fed_batch",
+      "batch_culture",
       "cstr",
-      "gas_liquid_transfer",
-      "microalgae_pbr",
-      "generic_ode",
+      "pfr",
+      "enzyme_kinetics",
+      "gas_liquid",
+      "microalgae_photobioreactor",
+      "oxygen_balanced_mixotrophy",
+      "unknown",
     ],
   })
     .notNull()
-    .default("generic_ode"),
+    .default("unknown"),
   // Normalised classifier confidence in [0, 1]. 0 = no keyword evidence.
   modelTypeConfidence: real("model_type_confidence").notNull().default(0),
   // Keywords from the source text that triggered the classification.
@@ -73,13 +76,16 @@ export const extractionsTable = pgTable("extractions", {
   // Null means "use the classifier result".
   modelTypeOverride: text("model_type_override", {
     enum: [
-      "chemostat",
-      "batch_reactor",
+      "monod_chemostat",
       "fed_batch",
+      "batch_culture",
       "cstr",
-      "gas_liquid_transfer",
-      "microalgae_pbr",
-      "generic_ode",
+      "pfr",
+      "enzyme_kinetics",
+      "gas_liquid",
+      "microalgae_photobioreactor",
+      "oxygen_balanced_mixotrophy",
+      "unknown",
     ],
   }),
   createdAt: timestamp("created_at", { withTimezone: true })

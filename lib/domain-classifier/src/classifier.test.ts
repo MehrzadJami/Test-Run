@@ -10,7 +10,12 @@
 
 import { describe, it, expect } from "vitest";
 import { classifyModel } from "./classifier";
-import type { ClassificationInput } from "./types";
+import { getDomainTemplate } from "./templates";
+import {
+  LEGACY_MODEL_TYPE_MAP,
+  normalizeModelType,
+  type ClassificationInput,
+} from "./types";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,13 +28,13 @@ function cls(input: ClassificationInput) {
 describe("chemostat", () => {
   it("classifies by title keyword", () => {
     const r = cls({ title: "Chemostat model for E. coli growth" });
-    expect(r.modelType).toBe("chemostat");
+    expect(r.modelType).toBe("monod_chemostat");
     expect(r.confidence).toBeGreaterThan(0.5);
   });
 
   it("classifies by domain string", () => {
     const r = cls({ domain: "Continuous culture chemostat — Monod kinetics" });
-    expect(r.modelType).toBe("chemostat");
+    expect(r.modelType).toBe("monod_chemostat");
   });
 
   it("classifies by source text keywords", () => {
@@ -37,7 +42,7 @@ describe("chemostat", () => {
       sourceText:
         "The dilution rate D is defined as F/V. At washout, D exceeds the maximum growth rate. Sin denotes feed concentration.",
     });
-    expect(r.modelType).toBe("chemostat");
+    expect(r.modelType).toBe("monod_chemostat");
     expect(r.matchedKeywords).toContain("dilution rate");
   });
 
@@ -46,7 +51,7 @@ describe("chemostat", () => {
       parameterNames: ["dilution rate", "feed substrate concentration", "yield coefficient"],
       parameterSymbols: ["D", "Sin", "Yxs"],
     });
-    expect(r.modelType).toBe("chemostat");
+    expect(r.modelType).toBe("monod_chemostat");
   });
 
   it("includes washout in matched keywords when present", () => {
@@ -60,10 +65,10 @@ describe("chemostat", () => {
 
 // ── Batch reactor ────────────────────────────────────────────────────────────
 
-describe("batch_reactor", () => {
+describe("batch_culture", () => {
   it("classifies by title", () => {
     const r = cls({ title: "Batch fermentation kinetics of Saccharomyces cerevisiae" });
-    expect(r.modelType).toBe("batch_reactor");
+    expect(r.modelType).toBe("batch_culture");
   });
 
   it("classifies by source text", () => {
@@ -71,12 +76,12 @@ describe("batch_reactor", () => {
       sourceText:
         "In this batch culture, cells were inoculated at an initial biomass concentration of 0.5 g/L. No inflow or outflow occurred during the experiment.",
     });
-    expect(r.modelType).toBe("batch_reactor");
+    expect(r.modelType).toBe("batch_culture");
   });
 
   it("classifies when title says batch process", () => {
     const r = cls({ title: "Batch process for antibiotic production" });
-    expect(r.modelType).toBe("batch_reactor");
+    expect(r.modelType).toBe("batch_culture");
   });
 });
 
@@ -150,10 +155,10 @@ describe("cstr", () => {
 
 // ── Gas-liquid oxygen transfer ───────────────────────────────────────────────
 
-describe("gas_liquid_transfer", () => {
+describe("gas_liquid", () => {
   it("classifies by kLa in title", () => {
     const r = cls({ title: "kLa characterisation in stirred tank bioreactor" });
-    expect(r.modelType).toBe("gas_liquid_transfer");
+    expect(r.modelType).toBe("gas_liquid");
     expect(r.confidence).toBeGreaterThan(0.5);
   });
 
@@ -162,7 +167,7 @@ describe("gas_liquid_transfer", () => {
       sourceText:
         "Dissolved oxygen (DO) was modelled using the volumetric mass transfer coefficient kLa and the oxygen saturation concentration C*. OTR = kLa (C* - CL).",
     });
-    expect(r.modelType).toBe("gas_liquid_transfer");
+    expect(r.modelType).toBe("gas_liquid");
     expect(r.matchedKeywords).toContain("kla");
   });
 
@@ -171,23 +176,23 @@ describe("gas_liquid_transfer", () => {
       parameterNames: ["volumetric mass transfer coefficient", "saturation concentration"],
       parameterSymbols: ["kLa", "C*"],
     });
-    expect(r.modelType).toBe("gas_liquid_transfer");
+    expect(r.modelType).toBe("gas_liquid");
   });
 
   it("classifies by oxygen transfer rate keywords", () => {
     const r = cls({
       sourceText: "Aeration rate and agitation speed determine the oxygen transfer rate OTR and OUR.",
     });
-    expect(r.modelType).toBe("gas_liquid_transfer");
+    expect(r.modelType).toBe("gas_liquid");
   });
 });
 
 // ── Microalgae / PBR ─────────────────────────────────────────────────────────
 
-describe("microalgae_pbr", () => {
+describe("microalgae_photobioreactor", () => {
   it("classifies by title with photobioreactor", () => {
     const r = cls({ title: "Dynamic model of a flat-panel photobioreactor for microalgae cultivation" });
-    expect(r.modelType).toBe("microalgae_pbr");
+    expect(r.modelType).toBe("microalgae_photobioreactor");
     expect(r.confidence).toBeGreaterThan(0.5);
   });
 
@@ -196,7 +201,7 @@ describe("microalgae_pbr", () => {
       sourceText:
         "Growth rate was modelled as a function of photosynthetically active radiation (PAR). Light saturation at KI = 120 μmol/m²/s. Microalgae productivity was measured daily.",
     });
-    expect(r.modelType).toBe("microalgae_pbr");
+    expect(r.modelType).toBe("microalgae_photobioreactor");
     expect(r.matchedKeywords).toContain("light saturation");
   });
 
@@ -206,38 +211,79 @@ describe("microalgae_pbr", () => {
       parameterNames: ["light irradiance", "maximum growth rate", "light saturation constant"],
       parameterSymbols: ["I", "μmax", "KI"],
     });
-    expect(r.modelType).toBe("microalgae_pbr");
+    expect(r.modelType).toBe("microalgae_photobioreactor");
   });
 
   it("classifies by photoinhibition keyword", () => {
     const r = cls({
       sourceText: "At high irradiance, photoinhibition was observed. The Haldane model was used.",
     });
-    expect(r.modelType).toBe("microalgae_pbr");
+    expect(r.modelType).toBe("microalgae_photobioreactor");
+  });
+});
+
+describe("additional canonical model types", () => {
+  it("classifies PFR examples", () => {
+    const r = cls({
+      sourceText: "A plug-flow tubular reactor is modeled along axial coordinate z.",
+    });
+    expect(r.modelType).toBe("pfr");
+  });
+
+  it("classifies enzyme kinetics examples", () => {
+    const r = cls({
+      sourceText: "The enzyme follows Michaelis-Menten kinetics with Vmax and Km.",
+    });
+    expect(r.modelType).toBe("enzyme_kinetics");
+  });
+
+  it("classifies oxygen-balanced mixotrophy examples", () => {
+    const r = cls({
+      sourceText:
+        "A mixotrophic microalgae culture used acetate feed with dissolved oxygen control and autotrophic growth.",
+    });
+    expect(r.modelType).toBe("oxygen_balanced_mixotrophy");
   });
 });
 
 // ── Generic ODE (fallback) ───────────────────────────────────────────────────
 
-describe("generic_ode", () => {
-  it("returns generic_ode for empty input", () => {
+describe("unknown", () => {
+  it("returns unknown for empty input", () => {
     const r = cls({});
-    expect(r.modelType).toBe("generic_ode");
+    expect(r.modelType).toBe("unknown");
     expect(r.confidence).toBe(0);
     expect(r.matchedKeywords).toHaveLength(0);
   });
 
-  it("returns generic_ode when text has no domain keywords", () => {
+  it("returns unknown when text has no domain keywords", () => {
     const r = cls({
       sourceText: "Consider the following system of ODEs with initial conditions y(0) = 1.",
       title: "Mathematical model",
     });
-    expect(r.modelType).toBe("generic_ode");
+    expect(r.modelType).toBe("unknown");
   });
 
-  it("returns zero scores for generic_ode in the scores map", () => {
+  it("returns zero scores for unknown in the scores map", () => {
     const r = cls({ title: "Some ODE system" });
-    expect(r.scores["generic_ode"]).toBeUndefined();
+    expect(r.scores["unknown"]).toBeUndefined();
+  });
+});
+
+describe("legacy model type mapping", () => {
+  it("maps every legacy model type to its canonical replacement", () => {
+    expect(normalizeModelType("chemostat")).toBe("monod_chemostat");
+    expect(normalizeModelType("batch_reactor")).toBe("batch_culture");
+    expect(normalizeModelType("gas_liquid_transfer")).toBe("gas_liquid");
+    expect(normalizeModelType("microalgae_pbr")).toBe(
+      "microalgae_photobioreactor",
+    );
+    expect(normalizeModelType("generic_ode")).toBe("unknown");
+    expect(Object.keys(LEGACY_MODEL_TYPE_MAP)).toHaveLength(5);
+  });
+
+  it("maps legacy template lookups to canonical templates", () => {
+    expect(getDomainTemplate("gas_liquid_transfer").modelType).toBe("gas_liquid");
   });
 });
 
@@ -268,7 +314,7 @@ describe("edge cases", () => {
     });
     // Should classify as chemostat (higher title weight), but oxygen keywords appear too
     expect(r.matchedKeywords.length).toBeGreaterThan(0);
-    expect(["chemostat", "gas_liquid_transfer"]).toContain(r.modelType);
+    expect(["monod_chemostat", "gas_liquid"]).toContain(r.modelType);
   });
 
   it("repeated keywords are capped and do not linearly inflate confidence", () => {

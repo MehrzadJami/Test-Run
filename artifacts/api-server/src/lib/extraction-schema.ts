@@ -9,6 +9,7 @@
 // "what a successful extraction looks like".
 
 import { z } from "zod/v4";
+import { MODEL_TYPES } from "@workspace/domain-classifier";
 
 export const ConfidenceSchema = z.enum(["high", "medium", "low"]);
 
@@ -20,18 +21,7 @@ export const ExtendedRoleSchema = z.enum([
   "control",
 ]);
 
-export const ModelTypeSchema = z.enum([
-  "monod_chemostat",
-  "fed_batch",
-  "batch_culture",
-  "cstr",
-  "pfr",
-  "enzyme_kinetics",
-  "gas_liquid",
-  "microalgae_photobioreactor",
-  "oxygen_balanced_mixotrophy",
-  "unknown",
-]);
+export const ModelTypeSchema = z.enum(MODEL_TYPES);
 
 export const StateVariableSchema = z.object({
   symbol: z.string().min(1, "Variable symbol is required"),
