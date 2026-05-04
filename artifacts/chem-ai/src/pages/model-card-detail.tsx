@@ -47,6 +47,7 @@ import {
   Lock,
   Share2,
   Check,
+  Copy,
 } from "lucide-react";
 import {
   analyzeReproducibility,
@@ -74,6 +75,7 @@ import {
   isSupportedSimulationModel,
   SIMULATION_UNSUPPORTED_MESSAGE,
 } from "@/lib/simulation-support";
+import { generateLiteratureSearchSuggestions } from "@/lib/literature-search-assistant";
 import { VariablesTab } from "@/components/model-card/VariablesTab";
 import { ParametersTab } from "@/components/model-card/ParametersTab";
 import { EquationsTab } from "@/components/model-card/EquationsTab";
@@ -354,6 +356,76 @@ const ASSEMBLY_SEVERITY_CONFIG: Record<
   },
 };
 
+type SourceRequestCard = {
+  title: string;
+  description: string;
+  icon: typeof FileText;
+  matches: ModelAssemblyReport["missing_requirements"];
+  disabled?: boolean;
+  planned?: boolean;
+};
+
+function buildSourceRequestCards(report: ModelAssemblyReport): SourceRequestCard[] {
+  const missing = report.missing_requirements;
+  const bySuggestedSource = (source: string) =>
+    missing.filter((item) => item.suggested_source === source);
+  const byCategory = (...categories: string[]) =>
+    missing.filter((item) => categories.includes(item.category));
+  const assumptionItems = missing.filter(
+    (item) =>
+      item.suggested_source === "user_assumption" ||
+      [
+        "kinetic_parameter",
+        "stoichiometric_yield",
+        "physical_constant",
+        "gas_transfer",
+        "control_parameter",
+        "controller",
+      ].includes(item.category),
+  );
+
+  return [
+    {
+      title: "Upload Supporting Information",
+      description: "Best source for omitted kinetic constants, light attenuation terms, tables, and supplemental methods.",
+      icon: FileText,
+      matches: bySuggestedSource("supporting_information"),
+    },
+    {
+      title: "Upload Cited Paper",
+      description: "Use when the model depends on a referenced light, kinetic, controller, or transport model.",
+      icon: FileText,
+      matches: bySuggestedSource("cited_paper"),
+    },
+    {
+      title: "Provide Parameter Assumptions",
+      description: "Use explicit user assumptions only when the paper does not report the needed convention or value.",
+      icon: Sparkles,
+      matches: assumptionItems,
+    },
+    {
+      title: "Upload Existing Code",
+      description: "Useful when controller logic, rate laws, or calibration scripts already exist outside the paper.",
+      icon: Code2,
+      matches: byCategory("controller"),
+    },
+    {
+      title: "Upload Experimental CSV for Calibration",
+      description: "Needed when kinetic constants must be estimated from measured time-series or steady-state data.",
+      icon: Database,
+      matches: byCategory("calibration_required"),
+    },
+    {
+      title: "Search Literature Later",
+      description: "Planned workflow. Automatic literature search is not enabled in this build.",
+      icon: Globe,
+      matches: [],
+      disabled: true,
+      planned: true,
+    },
+  ];
+}
+
 // ─── Main page component ───────────────────────────────────────────────────────
 
 export default function ModelCardDetail() {
@@ -476,11 +548,14 @@ function ModelCardDetailInner({
   const isPublic = visibility === "public";
   const isMockModelCard = isMockProvider(extraction.providerUsed);
   const supportsSimulation = isSupportedSimulationModel({
+    rawModelType: (raw as { model_type?: string | null } | null | undefined)?.model_type,
+    modelCardModelType: raw?.model_card?.model_type,
     modelType: extraction.modelType,
     modelTypeOverride: extraction.modelTypeOverride,
     modelCardTitle: extraction.modelCardTitle,
     systemType: raw?.system_type,
     domain: extraction.domain,
+    parameters,
   });
   const showSimulationControl = Boolean(
     raw?.model_card?.can_generate_ode_template || supportsSimulation,
@@ -630,6 +705,7 @@ function ModelCardDetailInner({
         limitationItems,
         raw: raw ?? null,
         report,
+        assemblyReport,
         unitReport,
         pythonCode,
         review: reviewData,
@@ -667,6 +743,11 @@ function ModelCardDetailInner({
     parameters.filter((p) => p.editedByUser).length +
     equations.filter((e) => e.editedByUser).length +
     [...assumptionItems, ...limitationItems].filter((a) => a.editedByUser).length;
+  const criticalAssemblyMissing = assemblyReport.missing_requirements.filter(
+    (missing) => missing.severity === "critical",
+  );
+  const sourceRequestCards = buildSourceRequestCards(assemblyReport);
+  const literatureSuggestions = generateLiteratureSearchSuggestions(assemblyReport);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
@@ -926,6 +1007,14 @@ function ModelCardDetailInner({
             {assemblyReport.missing_requirements.filter((m) => m.severity === "critical").length > 0 && (
               <span className="ml-1 text-red-500 font-bold">
                 ({assemblyReport.missing_requirements.filter((m) => m.severity === "critical").length})
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="source-requests" data-testid="tab-source-requests">
+            Complete Model
+            {criticalAssemblyMissing.length > 0 && (
+              <span className="ml-1 text-red-500 font-bold">
+                ({criticalAssemblyMissing.length})
               </span>
             )}
           </TabsTrigger>
@@ -1287,6 +1376,294 @@ function ModelCardDetailInner({
                   </li>
                 ))}
               </ol>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Complete Model / Source Requests ── */}
+        <TabsContent value="source-requests" className="mt-6 space-y-6">
+          <Card className={`border ${assemblyStatusClass(assemblyReport.assembly_status)}`}>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Package className="h-5 w-5" />
+                    Complete This Model
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Target: {assemblyReport.target_model_type}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="uppercase">
+                    {assemblyReport.assembly_status}
+                  </Badge>
+                  <Badge variant={assemblyReport.can_generate_runnable_model ? "default" : "secondary"}>
+                    Runnable: {assemblyReport.can_generate_runnable_model ? "yes" : "no"}
+                  </Badge>
+                  <Badge variant={criticalAssemblyMissing.length > 0 ? "destructive" : "secondary"}>
+                    Critical missing: {criticalAssemblyMissing.length}
+                  </Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm">
+                {assemblyReport.can_generate_runnable_model
+                  ? "No source requests are required by the assembly analyzer, but the extracted model should still be reviewed against the paper."
+                  : "Resolve the critical missing requirements before treating this as a runnable dynamic model. Until then, exports should be considered scaffold-only."}
+              </p>
+            </CardContent>
+          </Card>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {sourceRequestCards.map((request) => {
+              const Icon = request.icon;
+              const active = request.matches.length > 0;
+              return (
+                <Card
+                  key={request.title}
+                  aria-disabled={request.disabled ? "true" : undefined}
+                  className={`border ${request.disabled ? "opacity-60 bg-muted/30" : active ? "border-primary/30 bg-primary/5" : "bg-background"}`}
+                >
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Icon className="h-4 w-4 text-muted-foreground" />
+                        {request.title}
+                      </CardTitle>
+                      {request.planned ? (
+                        <Badge variant="outline" className="text-[10px] uppercase">
+                          <Lock className="h-3 w-3 mr-1" />
+                          Planned
+                        </Badge>
+                      ) : active ? (
+                        <Badge variant="default" className="text-[10px] uppercase">
+                          {request.matches.length} item{request.matches.length === 1 ? "" : "s"}
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="text-[10px] uppercase">
+                          No request
+                        </Badge>
+                      )}
+                    </div>
+                    <CardDescription>{request.description}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {request.planned ? (
+                      <p className="text-xs text-muted-foreground">
+                        Disabled for now. No automatic web search is performed.
+                      </p>
+                    ) : active ? (
+                      <ul className="space-y-1.5">
+                        {request.matches.slice(0, 4).map((missing, i) => (
+                          <li key={`${request.title}-${missing.item}-${i}`} className="text-xs flex items-start gap-2">
+                            <TriangleAlert className="h-3.5 w-3.5 mt-0.5 text-amber-500 flex-shrink-0" />
+                            <span>{missing.item}</span>
+                          </li>
+                        ))}
+                        {request.matches.length > 4 ? (
+                          <li className="text-xs text-muted-foreground">
+                            +{request.matches.length - 4} more
+                          </li>
+                        ) : null}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No current missing item points to this source type.
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Globe className="h-5 w-5 text-muted-foreground" />
+                    Find Sources
+                  </CardTitle>
+                  <CardDescription>
+                    Manual search assistant. These are query suggestions only and do not auto-fill model values.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="uppercase">
+                  Manual search assistant
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {literatureSuggestions.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">
+                  No missing requirements available for source search suggestions.
+                </p>
+              ) : (
+                <>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300">
+                    Candidate values must be verified before use. This assistant does not scrape papers, choose parameter values, or add citations.
+                  </div>
+                  <div className="space-y-3">
+                    {literatureSuggestions.map((suggestion, i) => (
+                      <div
+                        key={`${suggestion.missing_item}-${i}`}
+                        className="rounded-lg border p-3 text-sm"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold">{suggestion.missing_item}</span>
+                          <Badge variant="secondary" className="uppercase text-[10px]">
+                            {suggestion.likely_source_type.replace(/_/g, " ")}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {suggestion.warning}
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          {suggestion.suggested_queries.map((query, queryIndex) => (
+                            <div
+                              key={`${query}-${queryIndex}`}
+                              className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-2"
+                            >
+                              <code className="flex-1 text-xs whitespace-normal break-words">
+                                {query}
+                              </code>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 flex-shrink-0"
+                                onClick={() => void navigator.clipboard.writeText(query)}
+                                aria-label={`Copy search query: ${query}`}
+                              >
+                                <Copy className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Critical Missing Requirements</CardTitle>
+              <CardDescription>
+                These must be resolved before this model should be presented as runnable.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {criticalAssemblyMissing.length === 0 ? (
+                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 text-sm">
+                  <CheckCircle2 className="h-4 w-4" />
+                  No critical source requests detected.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {criticalAssemblyMissing.map((missing, i) => {
+                    const cfg = ASSEMBLY_SEVERITY_CONFIG[missing.severity];
+                    return (
+                      <div
+                        key={`${missing.category}-${missing.item}-critical-${i}`}
+                        className={`rounded-lg border p-3 text-sm ${cfg.classes}`}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className="uppercase text-[10px]">
+                            {cfg.label}
+                          </Badge>
+                          <Badge variant="secondary" className="uppercase text-[10px]">
+                            {missing.category.replace(/_/g, " ")}
+                          </Badge>
+                          <span className="font-semibold">{missing.item}</span>
+                        </div>
+                        <p className="mt-2 text-xs">
+                          {missing.why_needed}
+                        </p>
+                        <p className="mt-1 text-xs">
+                          <span className="font-semibold">Suggested source:</span>{" "}
+                          {missing.suggested_source.replace(/_/g, " ")}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Recommended Next Actions</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ol className="space-y-3">
+                {assemblyReport.recommended_next_actions.map((action, i) => (
+                  <li key={`source-action-${action}-${i}`} className="flex items-start gap-3 text-sm">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center mt-0.5">
+                      {i + 1}
+                    </span>
+                    {action}
+                  </li>
+                ))}
+              </ol>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>All Missing Items</CardTitle>
+              <CardDescription>
+                Each missing item is tied to why it is needed, a suggested source, and severity.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {assemblyReport.missing_requirements.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">
+                  No missing assembly requirements detected.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {assemblyReport.missing_requirements.map((missing, i) => {
+                    const cfg = ASSEMBLY_SEVERITY_CONFIG[missing.severity];
+                    return (
+                      <div
+                        key={`${missing.category}-${missing.item}-all-${i}`}
+                        className="rounded-lg border p-3 text-sm"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className={`uppercase text-[10px] ${cfg.classes}`}>
+                            {cfg.label}
+                          </Badge>
+                          <Badge variant="secondary" className="uppercase text-[10px]">
+                            {missing.category.replace(/_/g, " ")}
+                          </Badge>
+                          <span className="font-semibold">{missing.item}</span>
+                        </div>
+                        <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                          <p>
+                            <span className="font-semibold text-foreground">Why needed:</span>{" "}
+                            {missing.why_needed}
+                          </p>
+                          <p>
+                            <span className="font-semibold text-foreground">Suggested source:</span>{" "}
+                            {missing.suggested_source.replace(/_/g, " ")}
+                          </p>
+                          <p>
+                            <span className="font-semibold text-foreground">Required for:</span>{" "}
+                            {missing.required_for}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

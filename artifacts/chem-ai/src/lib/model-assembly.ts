@@ -32,7 +32,9 @@ export type MissingRequirementCategory =
   | "physical_constant"
   | "light_model"
   | "gas_transfer"
-  | "source_document";
+  | "source_document"
+  | "controller"
+  | "calibration_required";
 
 export type SuggestedSource =
   | "current paper"
@@ -652,11 +654,19 @@ function addOxygenBalancedMixotrophyChecks(
       suggested_source: "supporting_information",
       severity: "critical",
     });
+    addMissing(missing, seen, {
+      item: "Calibration data or accepted parameter assumptions",
+      category: "calibration_required",
+      required_for: "estimating kinetic constants absent from the current source",
+      why_needed: "If kinetic constants are not reported, runnable rates require calibration data or explicit user assumptions; this analysis does not invent values.",
+      suggested_source: "calibration",
+      severity: "warning",
+    });
   }
   if (closedLoopControlClaimed(corpus) && !hasControllerParameters(input, corpus)) {
     addMissing(missing, seen, {
       item: "Controller parameters for DO control",
-      category: "control_parameter",
+      category: "controller",
       required_for: "closed-loop oxygen control dynamics",
       why_needed: "A claimed DO controller needs setpoint logic and gains/time constants before it can be simulated.",
       suggested_source: "user_assumption",
@@ -724,8 +734,12 @@ function recommendedActions(missing: MissingRequirement[]): string[] {
   if (text.includes("kinetic")) {
     actions.push("Provide kinetic constants or allow calibration");
   }
+  if (text.includes("calibration_required") || text.includes("calibration data")) {
+    actions.push("Upload experimental CSV for calibration or provide parameter assumptions");
+  }
   if (text.includes("controller")) {
     actions.push("Provide controller parameters for closed-loop DO control");
+    actions.push("Upload existing control code if controller logic is already implemented");
   }
   if (text.includes("initial_condition")) {
     actions.push("Provide initial conditions for each state variable");

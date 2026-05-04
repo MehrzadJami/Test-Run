@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateModelPackage, type ModelPackageInput } from "../package-generator";
+import type { ModelAssemblyReport } from "../model-assembly";
 import type { ReproducibilityReport } from "../reproducibility";
 import type { UnitCheckReport } from "../unit-checker";
 
@@ -36,6 +37,34 @@ function baseUnitReport(): UnitCheckReport {
   };
 }
 
+function baseAssemblyReport(): ModelAssemblyReport {
+  return {
+    assembly_status: "partial",
+    target_model_type: "Chemostat / continuous bioreactor model",
+    can_generate_runnable_model: false,
+    can_generate_scaffold: true,
+    available_from_current_source: [
+      {
+        item: "D = 0.1 1/h",
+        type: "control",
+        source_context: "D was reported in the current source.",
+        confidence: "high",
+      },
+    ],
+    missing_requirements: [
+      {
+        item: "Initial conditions",
+        category: "initial_condition",
+        required_for: "ODE simulation start values",
+        why_needed: "ODE solvers need initial values for each state variable.",
+        suggested_source: "user_assumption",
+        severity: "critical",
+      },
+    ],
+    recommended_next_actions: ["Provide initial conditions for each state variable"],
+  };
+}
+
 function baseInput(overrides: Partial<ModelPackageInput> = {}): ModelPackageInput {
   return {
     title: "Monod Chemostat",
@@ -66,6 +95,7 @@ function baseInput(overrides: Partial<ModelPackageInput> = {}): ModelPackageInpu
       equations: [{ label: "(1)", equation_latex: "dX/dt", source_context: "Eq 1" }],
     },
     report: baseReport(),
+    assemblyReport: baseAssemblyReport(),
     unitReport: baseUnitReport(),
     pythonCode: "import numpy as np\n# TODO: implement",
     ...overrides,
@@ -83,6 +113,8 @@ const EXPECTED_FILES = [
   "assumptions.md",
   "limitations.md",
   "missing_information.md",
+  "model_assembly_report.json",
+  "missing_requirements.md",
   "reproducibility_report.json",
   "unit_check_report.json",
   "raw_extraction.json",
@@ -93,12 +125,12 @@ const EXPECTED_FILES = [
 ];
 
 describe("generateModelPackage — file inventory", () => {
-  it("returns exactly 15 files", () => {
+  it("returns exactly 17 files", () => {
     const files = generateModelPackage(baseInput());
-    expect(Object.keys(files)).toHaveLength(15);
+    expect(Object.keys(files)).toHaveLength(17);
   });
 
-  it("contains all 15 expected filenames", () => {
+  it("contains all 17 expected filenames", () => {
     const files = generateModelPackage(baseInput());
     for (const name of EXPECTED_FILES) {
       expect(Object.keys(files)).toContain(name);
@@ -199,6 +231,12 @@ describe("generateModelPackage — JSON files", () => {
     expect(parsed.unit_check_status).toBe("warning");
   });
 
+  it("model_assembly_report.json is valid JSON", () => {
+    const files = generateModelPackage(baseInput());
+    const parsed = JSON.parse(files["model_assembly_report.json"]);
+    expect(parsed.assembly_status).toBe("partial");
+  });
+
   it("raw_extraction.json is valid JSON", () => {
     const files = generateModelPackage(baseInput());
     expect(() => JSON.parse(files["raw_extraction.json"])).not.toThrow();
@@ -241,10 +279,18 @@ describe("generateModelPackage — missing_information.md", () => {
   });
 });
 
+describe("generateModelPackage — missing_requirements.md", () => {
+  it("contains model assembly source requests", () => {
+    const files = generateModelPackage(baseInput());
+    expect(files["missing_requirements.md"]).toContain("Initial conditions");
+    expect(files["missing_requirements.md"]).toContain("Provide initial conditions");
+  });
+});
+
 // ─── Edge cases ───────────────────────────────────────────────────────────────
 
 describe("generateModelPackage — edge cases", () => {
-  it("returns 15 files even with all empty arrays", () => {
+  it("returns 17 files even with all empty arrays", () => {
     const input = baseInput({
       equations: [],
       variables: [],
@@ -253,7 +299,7 @@ describe("generateModelPackage — edge cases", () => {
       limitationItems: [],
     });
     const files = generateModelPackage(input);
-    expect(Object.keys(files)).toHaveLength(15);
+    expect(Object.keys(files)).toHaveLength(17);
   });
 
   it("CSV cells with commas are properly quoted", () => {

@@ -37,9 +37,16 @@ import {
   TrendingUp,
 } from "lucide-react";
 import {
-  isSupportedSimulationModel,
+  getSupportedSimulationModelType,
   SIMULATION_UNSUPPORTED_MESSAGE,
+  type SupportedSimulationModelType,
 } from "@/lib/simulation-support";
+import {
+  batchCultureODE,
+  monodChemostatODE,
+  rk4,
+  type SimulationPoint,
+} from "@/lib/simulation-engine";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -53,12 +60,6 @@ interface SimParams {
   S0: number;
   tFinal: number;
   dt: number;
-}
-
-interface SimPoint {
-  t: number;
-  X: number;
-  S: number;
 }
 
 interface ValidationError {
@@ -85,70 +86,19 @@ const DEMO_PARAMS: SimParams = {
   dt: 0.1,
 };
 
-// ─── ODE / solver ─────────────────────────────────────────────────────────────
-
-function chemostatDerivatives(
-  X: number,
-  S: number,
-  p: SimParams
-): [number, number] {
-  const Ssafe = Math.max(0, S);
-  const mu = (p.mumax * Ssafe) / (p.Ks + Ssafe);
-  const dX = (mu - p.D) * X;
-  const dS = p.D * (p.Sin - Ssafe) - (1 / p.Yxs) * mu * X;
-  return [dX, dS];
-}
-
-function rungeKutta4(p: SimParams): SimPoint[] {
-  const steps = Math.min(Math.ceil(p.tFinal / p.dt), 50_000);
-  const h = p.tFinal / steps;
-  const points: SimPoint[] = [];
-  const decimation = Math.max(1, Math.floor(steps / 1000));
-
-  let X = p.X0;
-  let S = p.S0;
-  let t = 0;
-
-  for (let i = 0; i <= steps; i++) {
-    if (i % decimation === 0 || i === steps) {
-      points.push({
-        t: parseFloat(t.toFixed(4)),
-        X: parseFloat(Math.max(0, X).toFixed(6)),
-        S: parseFloat(Math.max(0, S).toFixed(6)),
-      });
-    }
-
-    const [k1X, k1S] = chemostatDerivatives(X, S, p);
-    const [k2X, k2S] = chemostatDerivatives(
-      X + 0.5 * h * k1X,
-      S + 0.5 * h * k1S,
-      p
-    );
-    const [k3X, k3S] = chemostatDerivatives(
-      X + 0.5 * h * k2X,
-      S + 0.5 * h * k2S,
-      p
-    );
-    const [k4X, k4S] = chemostatDerivatives(X + h * k3X, S + h * k3S, p);
-
-    X += (h / 6) * (k1X + 2 * k2X + 2 * k3X + k4X);
-    S += (h / 6) * (k1S + 2 * k2S + 2 * k3S + k4S);
-    t += h;
-
-    if (!isFinite(X) || !isFinite(S)) break;
-  }
-
-  return points;
-}
+const REQUIRED_FIELDS: Record<SupportedSimulationModelType, Array<keyof SimParams>> = {
+  monod_chemostat: ["mumax", "Ks", "D", "Sin", "Yxs", "X0", "S0", "tFinal", "dt"],
+  batch_culture: ["mumax", "Ks", "Yxs", "X0", "S0", "tFinal", "dt"],
+};
 
 // ─── validation ───────────────────────────────────────────────────────────────
 
-function validate(p: SimParams): ValidationError[] {
+function validate(p: SimParams, modelType: SupportedSimulationModelType): ValidationError[] {
   const errors: ValidationError[] = [];
   if (p.mumax <= 0) errors.push({ field: "mumax", message: "μmax must be > 0" });
   if (p.Ks <= 0) errors.push({ field: "Ks", message: "Ks must be > 0 (prevents division by zero in growth rate)" });
-  if (p.D < 0) errors.push({ field: "D", message: "Dilution rate D cannot be negative" });
-  if (p.Sin < 0) errors.push({ field: "Sin", message: "Feed concentration S_in cannot be negative" });
+  if (modelType === "monod_chemostat" && p.D < 0) errors.push({ field: "D", message: "Dilution rate D cannot be negative" });
+  if (modelType === "monod_chemostat" && p.Sin < 0) errors.push({ field: "Sin", message: "Feed concentration S_in cannot be negative" });
   if (p.Yxs <= 0) errors.push({ field: "Yxs", message: "Yield Yxs must be > 0" });
   if (p.X0 < 0) errors.push({ field: "X0", message: "Initial biomass X₀ cannot be negative" });
   if (p.S0 < 0) errors.push({ field: "S0", message: "Initial substrate S₀ cannot be negative" });
@@ -159,20 +109,22 @@ function validate(p: SimParams): ValidationError[] {
   return errors;
 }
 
-function getWarnings(p: SimParams): Warning[] {
+function getWarnings(p: SimParams, modelType: SupportedSimulationModelType): Warning[] {
   const warnings: Warning[] = [];
-  const muMax_at_Sin = (p.mumax * p.Sin) / (p.Ks + p.Sin);
-  if (p.D > muMax_at_Sin) {
-    warnings.push({
-      id: "washout",
-      message: `Washout likely: D (${p.D.toFixed(3)} h⁻¹) exceeds maximum achievable μ at S_in (${muMax_at_Sin.toFixed(3)} h⁻¹). Biomass will decay to zero.`,
-    });
-  }
-  if (p.D === 0) {
-    warnings.push({
-      id: "batch",
-      message: "D = 0 means no inflow/outflow — this is batch mode, not chemostat.",
-    });
+  if (modelType === "monod_chemostat") {
+    const muMax_at_Sin = (p.mumax * p.Sin) / (p.Ks + p.Sin);
+    if (p.D > muMax_at_Sin) {
+      warnings.push({
+        id: "washout",
+        message: `Washout likely: D (${p.D.toFixed(3)} h⁻¹) exceeds maximum achievable μ at S_in (${muMax_at_Sin.toFixed(3)} h⁻¹). Biomass will decay to zero.`,
+      });
+    }
+    if (p.D === 0) {
+      warnings.push({
+        id: "batch",
+        message: "D = 0 means no inflow/outflow — this is batch mode. Use an explicit batch_culture model card when binding extracted batch data.",
+      });
+    }
   }
   if (p.dt > 0.5) {
     warnings.push({
@@ -191,10 +143,16 @@ function getWarnings(p: SimParams): Warning[] {
 
 // ─── CSV helper ───────────────────────────────────────────────────────────────
 
-function downloadCsv(data: SimPoint[], params: SimParams) {
+function downloadCsv(
+  data: SimulationPoint[],
+  params: SimParams,
+  modelType: SupportedSimulationModelType,
+) {
   const meta = [
-    "# ChemAI Model Compiler — Chemostat Simulation",
-    `# mumax=${params.mumax} Ks=${params.Ks} D=${params.D} Sin=${params.Sin} Yxs=${params.Yxs}`,
+    `# ChemAI Model Compiler — ${modelType === "batch_culture" ? "Batch Culture" : "Chemostat"} Simulation`,
+    modelType === "batch_culture"
+      ? `# mumax=${params.mumax} Ks=${params.Ks} Yxs=${params.Yxs}`
+      : `# mumax=${params.mumax} Ks=${params.Ks} D=${params.D} Sin=${params.Sin} Yxs=${params.Yxs}`,
     `# X0=${params.X0} S0=${params.S0} tFinal=${params.tFinal} dt=${params.dt}`,
     "",
   ].join("\n");
@@ -204,7 +162,7 @@ function downloadCsv(data: SimPoint[], params: SimParams) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "chemostat_simulation.csv";
+  a.download = `${modelType}_simulation.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -287,10 +245,177 @@ function toParams(raw: Record<string, string>): Partial<SimParams> {
   return out as Partial<SimParams>;
 }
 
-function isComplete(p: Partial<SimParams>): p is SimParams {
-  return Object.keys(DEMO_PARAMS).every(
-    (k) => k in p && isFinite((p as Record<string, number>)[k])
+function isComplete(
+  p: Partial<SimParams>,
+  modelType: SupportedSimulationModelType,
+): p is SimParams {
+  return REQUIRED_FIELDS[modelType].every(
+    (k) => k in p && Number.isFinite((p as Record<string, number>)[k])
   );
+}
+
+type SimulationParameterRow = {
+  symbol?: string | null;
+  value?: string | number | null;
+};
+
+type SimulationVariableRow = {
+  symbol?: string | null;
+  sourceQuote?: string | null;
+  originalValue?: Record<string, unknown> | null;
+};
+
+type SimulationRawExtraction = {
+  model_type?: string | null;
+  system_type?: string | null;
+  model_card?: {
+    model_type?: string | null;
+  } | null;
+  parameters?: SimulationParameterRow[];
+  state_variables?: Array<{
+    symbol?: string | null;
+    initial_condition?: string | number | null;
+    source_context?: string | null;
+  }>;
+};
+
+type SimulationCard = {
+  extraction: {
+    modelType?: string | null;
+    modelTypeOverride?: string | null;
+    modelCardTitle?: string | null;
+    domain?: string | null;
+    rawExtractionJson?: unknown;
+  };
+  parameters: SimulationParameterRow[];
+  variables: SimulationVariableRow[];
+};
+
+type BoundValues = {
+  rawParams: Record<string, string>;
+  boundFields: string[];
+};
+
+function normalizeSymbol(symbol: string | null | undefined): string {
+  return String(symbol ?? "")
+    .trim()
+    .replace(/[μµ]/g, "mu")
+    .replace(/[₀]/g, "0")
+    .replace(/[^a-zA-Z0-9_]/g, "")
+    .toLowerCase();
+}
+
+function parseNumberValue(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const match = String(value ?? "").match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildParamMap(card: SimulationCard | undefined): Map<string, number> {
+  const map = new Map<string, number>();
+  const add = (symbol: unknown, value: unknown) => {
+    const key = normalizeSymbol(String(symbol ?? ""));
+    const parsed = parseNumberValue(value);
+    if (key && parsed !== null) map.set(key, parsed);
+  };
+
+  for (const parameter of card?.parameters ?? []) add(parameter.symbol, parameter.value);
+
+  const raw = card?.extraction.rawExtractionJson as SimulationRawExtraction | null | undefined;
+  for (const parameter of raw?.parameters ?? []) add(parameter.symbol, parameter.value);
+
+  return map;
+}
+
+function extractInitialFromText(symbol: string, text: string | null | undefined): number | null {
+  const normalized = String(text ?? "").replace(/[₀]/g, "0");
+  const hasInitialContext = /\binitial\b|\binoculum\b|\bat\s+t\s*=\s*0\b/i.test(normalized);
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const direct = new RegExp(`\\b${escaped}\\s*0\\s*=\\s*([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)`, "i");
+  const initialContext = new RegExp(`\\b${escaped}\\s*=\\s*([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)`, "i");
+  const directMatch = normalized.match(direct);
+  if (directMatch) return parseNumberValue(directMatch[1]);
+  if (hasInitialContext) {
+    const match = normalized.match(initialContext);
+    if (match) return parseNumberValue(match[1]);
+  }
+  return null;
+}
+
+function buildInitialConditionMap(
+  card: SimulationCard | undefined,
+  paramMap: Map<string, number>,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  const x0 = paramMap.get("x0");
+  const s0 = paramMap.get("s0");
+  if (x0 !== undefined) map.set("X", x0);
+  if (s0 !== undefined) map.set("S", s0);
+
+  for (const variable of card?.variables ?? []) {
+    const symbol = String(variable.symbol ?? "").trim();
+    if (!symbol) continue;
+    const parsed =
+      parseNumberValue(variable.originalValue?.initial_condition) ??
+      extractInitialFromText(symbol, variable.sourceQuote);
+    if (parsed !== null) map.set(symbol, parsed);
+  }
+
+  const raw = card?.extraction.rawExtractionJson as SimulationRawExtraction | null | undefined;
+  for (const variable of raw?.state_variables ?? []) {
+    const symbol = String(variable.symbol ?? "").trim();
+    if (!symbol) continue;
+    const parsed =
+      parseNumberValue(variable.initial_condition) ??
+      extractInitialFromText(symbol, variable.source_context);
+    if (parsed !== null) map.set(symbol, parsed);
+  }
+
+  return map;
+}
+
+function bindExtractedValues(
+  card: SimulationCard | undefined,
+  modelType: SupportedSimulationModelType,
+): BoundValues {
+  const paramMap = buildParamMap(card);
+  const icMap = buildInitialConditionMap(card, paramMap);
+  const next = Object.fromEntries(
+    Object.entries(DEMO_PARAMS).map(([key, value]) => [key, String(value)]),
+  );
+  const boundFields: string[] = [];
+
+  const setParam = (field: keyof SimParams, aliases: string[]) => {
+    for (const alias of aliases) {
+      const value = paramMap.get(normalizeSymbol(alias));
+      if (value !== undefined) {
+        next[field] = String(value);
+        boundFields.push(field);
+        return;
+      }
+    }
+  };
+  const setInitial = (field: "X0" | "S0", symbol: string) => {
+    const value = icMap.get(symbol);
+    if (value !== undefined) {
+      next[field] = String(value);
+      boundFields.push(field);
+    }
+  };
+
+  setParam("mumax", ["mumax", "mu_max", "mu_maximum"]);
+  setParam("Ks", ["Ks"]);
+  setParam("Yxs", ["Yxs", "Yx_s", "Y_xs", "yield"]);
+  if (modelType === "monod_chemostat") {
+    setParam("D", ["D"]);
+    setParam("Sin", ["Sin", "S_in", "substrate_feed"]);
+  }
+  setInitial("X0", "X");
+  setInitial("S0", "S");
+
+  return { rawParams: next, boundFields };
 }
 
 // ─── main page ────────────────────────────────────────────────────────────────
@@ -299,6 +424,10 @@ export default function Simulation() {
   const qp = new URLSearchParams(window.location.search);
   const modelProjectId = Number(qp.get("projectId") ?? "");
   const canUseModelData = Number.isFinite(modelProjectId) && modelProjectId > 0;
+  const modelCardQuery = useGetModelCardByProject(canUseModelData ? modelProjectId : 0);
+  const modelCard = modelCardQuery.data as SimulationCard | undefined;
+  const rawExtraction =
+    modelCard?.extraction.rawExtractionJson as SimulationRawExtraction | null | undefined;
 
   const [rawParams, setRawParams] = useState<Record<string, string>>(
     () =>
@@ -306,90 +435,67 @@ export default function Simulation() {
         Object.entries(DEMO_PARAMS).map(([k, v]) => [k, String(v)])
       )
   );
-  const [simData, setSimData] = useState<SimPoint[] | null>(null);
+  const [simData, setSimData] = useState<SimulationPoint[] | null>(null);
   const [hasRun, setHasRun] = useState(false);
   const [lastParams, setLastParams] = useState<SimParams | null>(null);
-  const [mode, setMode] = useState<"demo" | "model">("demo");
+  const [valueSource, setValueSource] = useState<"demo" | "extracted">("demo");
+  const [boundFields, setBoundFields] = useState<string[]>([]);
   const [unsupportedModelMessage, setUnsupportedModelMessage] = useState<string | null>(null);
+  const [activeModelType, setActiveModelType] =
+    useState<SupportedSimulationModelType>("monod_chemostat");
 
   useEffect(() => {
     if (!canUseModelData) {
       setUnsupportedModelMessage(null);
+      setValueSource("demo");
+      setBoundFields([]);
+      setActiveModelType("monod_chemostat");
       return;
     }
-    let cancelled = false;
-    (async () => {
-      const res = await fetch(`/api/projects/${modelProjectId}/model-card`);
-      if (!res.ok) return;
-      const card = (await res.json()) as {
-        extraction?: {
-          modelType?: string | null;
-          modelTypeOverride?: string | null;
-          modelCardTitle?: string | null;
-          domain?: string | null;
-          rawExtractionJson?: { system_type?: string | null } | null;
-        };
-        parameters?: Array<{ symbol: string; value?: string | number | null }>;
-      };
-      if (cancelled || !card?.parameters) return;
+    if (!modelCard) return;
 
-      const supported = isSupportedSimulationModel({
-        modelType: card.extraction?.modelType,
-        modelTypeOverride: card.extraction?.modelTypeOverride,
-        modelCardTitle: card.extraction?.modelCardTitle,
-        systemType: card.extraction?.rawExtractionJson?.system_type,
-        domain: card.extraction?.domain,
-      });
+    const supportedType = getSupportedSimulationModelType({
+      rawModelType: rawExtraction?.model_type,
+      modelCardModelType: rawExtraction?.model_card?.model_type,
+      modelType: modelCard.extraction.modelType,
+      modelTypeOverride: modelCard.extraction.modelTypeOverride,
+      systemType: rawExtraction?.system_type,
+      domain: modelCard.extraction.domain,
+      parameters: modelCard.parameters,
+    });
 
-      if (!supported) {
-        setUnsupportedModelMessage(SIMULATION_UNSUPPORTED_MESSAGE);
-        setMode("demo");
-        return;
-      }
+    if (!supportedType) {
+      setUnsupportedModelMessage(SIMULATION_UNSUPPORTED_MESSAGE);
+      setValueSource("demo");
+      setBoundFields([]);
+      setSimData(null);
+      setHasRun(false);
+      setLastParams(null);
+      return;
+    }
 
-      setUnsupportedModelMessage(null);
-      const pMap = new Map<string, string>();
-      for (const p of card.parameters) {
-        pMap.set(String(p.symbol).toLowerCase(), String(p.value ?? ""));
-      }
-      setRawParams((prev) => {
-        const next = { ...prev };
-        const setIf = (key: keyof SimParams, ...aliases: string[]) => {
-          for (const a of aliases) {
-            const v = pMap.get(a);
-            if (v && v.trim() !== "") {
-              next[key] = v;
-              return;
-            }
-          }
-        };
-        setIf("mumax", "mumax", "mu_max");
-        setIf("Ks", "ks");
-        setIf("D", "d");
-        setIf("Sin", "sin", "s_in");
-        setIf("Yxs", "yxs");
-        setIf("X0", "x0");
-        setIf("S0", "s0");
-        return next;
-      });
-      setMode("model");
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseModelData, modelProjectId]);
+    const bound = bindExtractedValues(modelCard, supportedType);
+    setRawParams(bound.rawParams);
+    setUnsupportedModelMessage(null);
+    setActiveModelType(supportedType);
+    setValueSource(bound.boundFields.length > 0 ? "extracted" : "demo");
+    setBoundFields(bound.boundFields);
+    setSimData(null);
+    setHasRun(false);
+    setLastParams(null);
+  }, [canUseModelData, modelCard, rawExtraction]);
 
   const parsed = useMemo(() => toParams(rawParams), [rawParams]);
 
   const errors = useMemo<ValidationError[]>(() => {
-    if (!isComplete(parsed)) return [];
-    return validate(parsed);
-  }, [parsed]);
+    if (!isComplete(parsed, activeModelType)) return [];
+    return validate(parsed, activeModelType);
+  }, [parsed, activeModelType]);
 
   const warnings = useMemo<Warning[]>(() => {
-    if (!isComplete(parsed) || errors.length > 0) return [];
-    return getWarnings(parsed);
-  }, [parsed, errors]);
+    if (!isComplete(parsed, activeModelType) || errors.length > 0) return [];
+    return getWarnings(parsed, activeModelType);
+  }, [parsed, errors, activeModelType]);
 
   const fieldError = useCallback(
     (field: string) => errors.find((e) => e.field === field)?.message,
@@ -397,12 +503,20 @@ export default function Simulation() {
   );
 
   const handleRun = useCallback(() => {
-    if (unsupportedModelMessage || !isComplete(parsed) || errors.length > 0) return;
-    const data = rungeKutta4(parsed);
+    if (unsupportedModelMessage || !isComplete(parsed, activeModelType) || errors.length > 0) return;
+    const data = rk4(
+      activeModelType === "batch_culture" ? batchCultureODE : monodChemostatODE,
+      {
+        initialState: { X: parsed.X0, S: parsed.S0 },
+        params: { ...parsed },
+        tFinal: parsed.tFinal,
+        dt: parsed.dt,
+      },
+    );
     setSimData(data);
     setLastParams({ ...parsed });
     setHasRun(true);
-  }, [parsed, errors, unsupportedModelMessage]);
+  }, [parsed, errors, unsupportedModelMessage, activeModelType]);
 
   const handleReset = useCallback(() => {
     setRawParams(
@@ -413,15 +527,19 @@ export default function Simulation() {
     setSimData(null);
     setHasRun(false);
     setLastParams(null);
+    setValueSource("demo");
+    setBoundFields([]);
+    setUnsupportedModelMessage(null);
+    setActiveModelType("monod_chemostat");
   }, []);
 
   const set = (field: string) => (v: string) =>
     setRawParams((prev) => ({ ...prev, [field]: v }));
 
-  const canRun = !unsupportedModelMessage && isComplete(parsed) && errors.length === 0;
+  const canRun = !unsupportedModelMessage && isComplete(parsed, activeModelType) && errors.length === 0;
 
   const steadyState = useMemo(() => {
-    if (!lastParams) return null;
+    if (!lastParams || activeModelType !== "monod_chemostat") return null;
     const p = lastParams;
     if (p.D <= 0 || p.D >= p.mumax) return { washout: true };
     const SSS = (p.D * p.Ks) / (p.mumax - p.D);
@@ -443,15 +561,19 @@ export default function Simulation() {
           <div className="flex items-center gap-2 mb-1">
             <FlaskConical className="h-5 w-5 text-primary" />
             <h1 className="text-2xl font-bold tracking-tight">
-              Demo Monod Chemostat Simulation
+              {activeModelType === "batch_culture"
+                ? "Batch Culture Simulation"
+                : "Demo Monod Chemostat Simulation"}
             </h1>
             <Badge variant="secondary" className="font-mono text-xs">
               RK4
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground">
-            Chemostat / Monod kinetics — solved in-browser with 4th-order
-            Runge-Kutta
+            {activeModelType === "batch_culture"
+              ? "Batch Monod growth culture"
+              : "Chemostat / Monod kinetics"}{" "}
+            — solved in-browser with 4th-order Runge-Kutta
           </p>
           <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
             Demo / supported-model simulation, not a universal simulator.
@@ -460,9 +582,17 @@ export default function Simulation() {
             This demo solver is not automatically generated from arbitrary model cards yet.
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Mode: {mode === "model" ? "Model-derived parameters" : "Demo defaults"}
-            {mode === "demo" ? " (add ?projectId=<id> to use extracted params)" : ""}
+            {valueSource === "extracted" ? "Using extracted values" : "Using demo defaults"}
+            {valueSource === "demo" && !canUseModelData ? " (add ?projectId=<id> to use extracted params)" : ""}
+            {valueSource === "extracted" && boundFields.length > 0
+              ? ` (${boundFields.join(", ")})`
+              : ""}
           </p>
+          {modelCardQuery.isLoading && canUseModelData ? (
+            <p className="text-xs text-muted-foreground mt-1">
+              Loading model card for project {modelProjectId}…
+            </p>
+          ) : null}
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={handleReset}>
@@ -473,7 +603,7 @@ export default function Simulation() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => downloadCsv(simData, lastParams)}
+              onClick={() => downloadCsv(simData, lastParams, activeModelType)}
             >
               <Download className="h-4 w-4 mr-1.5" />
               Download CSV
@@ -493,6 +623,16 @@ export default function Simulation() {
           <AlertDescription className="text-sm">
             {unsupportedModelMessage} The project parameters were not loaded.
             Open <Link href="/simulation" className="underline underline-offset-2">the demo simulation without a project id</Link> to run the demo model.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {modelCardQuery.isError && canUseModelData ? (
+        <Alert className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/20">
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
+          <AlertTitle>Could not load model card</AlertTitle>
+          <AlertDescription className="text-sm">
+            Using demo defaults because project {modelProjectId} could not be loaded.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -563,33 +703,35 @@ export default function Simulation() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Operating Conditions
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <ParamField
-                id="D"
-                label="Dilution rate"
-                symbol="D"
-                unit="h⁻¹"
-                value={rawParams.D}
-                error={fieldError("D")}
-                onChange={set("D")}
-              />
-              <ParamField
-                id="Sin"
-                label="Feed substrate"
-                symbol="S_in"
-                unit="g/L"
-                value={rawParams.Sin}
-                error={fieldError("Sin")}
-                onChange={set("Sin")}
-              />
-            </CardContent>
-          </Card>
+          {activeModelType === "monod_chemostat" ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                  Operating Conditions
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <ParamField
+                  id="D"
+                  label="Dilution rate"
+                  symbol="D"
+                  unit="h⁻¹"
+                  value={rawParams.D}
+                  error={fieldError("D")}
+                  onChange={set("D")}
+                />
+                <ParamField
+                  id="Sin"
+                  label="Feed substrate"
+                  symbol="S_in"
+                  unit="g/L"
+                  value={rawParams.Sin}
+                  error={fieldError("Sin")}
+                  onChange={set("Sin")}
+                />
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader className="pb-3">
@@ -652,15 +794,15 @@ export default function Simulation() {
             <CardContent className="pt-4 pb-3 flex items-start gap-3">
               <ActivitySquare className="h-4 w-4 text-primary mt-0.5 shrink-0" />
               <div className="text-sm">
-                <p className="font-medium">Chemostat model card</p>
+                <p className="font-medium">Model card</p>
                 <p className="text-muted-foreground text-xs mb-2">
                   See the extracted equations and parameters this simulation is
                   based on.
                 </p>
-                <Link href="/model-cards/1">
+                <Link href={canUseModelData ? `/model-cards/${modelProjectId}` : "/model-cards"}>
                   <Button variant="outline" size="sm" className="text-xs h-7">
                     <ExternalLink className="h-3 w-3 mr-1.5" />
-                    Open model card
+                    {canUseModelData ? "Open model card" : "Open model cards"}
                   </Button>
                 </Link>
               </div>
@@ -685,7 +827,10 @@ export default function Simulation() {
                     </span>{" "}
                     and substrate{" "}
                     <span className="text-orange-500 font-semibold">S</span>{" "}
-                    trajectories — dashed lines show analytical steady state
+                    trajectories
+                    {activeModelType === "monod_chemostat"
+                      ? " — dashed lines show analytical steady state"
+                      : ""}
                   </CardDescription>
                 </div>
                 {hasRun && simData && (
@@ -870,28 +1015,53 @@ export default function Simulation() {
                     μ = μmax · S / (Ks + S)
                   </code>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1 font-medium">
-                    Biomass ODE
-                  </p>
-                  <code className="block bg-background border border-border rounded px-3 py-2 font-mono text-xs">
-                    dX/dt = (μ − D) · X
-                  </code>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1 font-medium">
-                    Substrate ODE
-                  </p>
-                  <code className="block bg-background border border-border rounded px-3 py-2 font-mono text-xs">
-                    dS/dt = D·(S_in−S) − (μ·X)/Yxs
-                  </code>
-                </div>
+                {activeModelType === "monod_chemostat" ? (
+                  <>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 font-medium">
+                        Biomass ODE
+                      </p>
+                      <code className="block bg-background border border-border rounded px-3 py-2 font-mono text-xs">
+                        dX/dt = (μ − D) · X
+                      </code>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 font-medium">
+                        Substrate ODE
+                      </p>
+                      <code className="block bg-background border border-border rounded px-3 py-2 font-mono text-xs">
+                        dS/dt = D·(S_in−S) − (μ·X)/Yxs
+                      </code>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 font-medium">
+                        Biomass ODE
+                      </p>
+                      <code className="block bg-background border border-border rounded px-3 py-2 font-mono text-xs">
+                        dX/dt = μ · X
+                      </code>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 font-medium">
+                        Substrate ODE
+                      </p>
+                      <code className="block bg-background border border-border rounded px-3 py-2 font-mono text-xs">
+                        dS/dt = −(μ·X)/Yxs
+                      </code>
+                    </div>
+                  </>
+                )}
               </div>
               <Separator />
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-1 text-xs text-muted-foreground">
                 <p><span className="font-mono font-semibold text-foreground">X</span> — biomass (g/L)</p>
                 <p><span className="font-mono font-semibold text-foreground">S</span> — substrate (g/L)</p>
-                <p><span className="font-mono font-semibold text-foreground">D</span> — dilution rate (h⁻¹)</p>
+                {activeModelType === "monod_chemostat" ? (
+                  <p><span className="font-mono font-semibold text-foreground">D</span> — dilution rate (h⁻¹)</p>
+                ) : null}
                 <p><span className="font-mono font-semibold text-foreground">Yxs</span> — yield (g-X/g-S)</p>
                 <p><span className="font-mono font-semibold text-foreground">μmax</span> — max growth (h⁻¹)</p>
                 <p><span className="font-mono font-semibold text-foreground">Ks</span> — half-saturation (g/L)</p>

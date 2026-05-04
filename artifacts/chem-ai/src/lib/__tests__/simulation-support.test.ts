@@ -1,25 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
+  getSupportedSimulationModelType,
   isSupportedSimulationModel,
   SIMULATION_UNSUPPORTED_MESSAGE,
 } from "@/lib/simulation-support";
 
 describe("simulation support detection", () => {
-  it("supports chemostat and Monod model metadata", () => {
-    expect(isSupportedSimulationModel({ modelType: "chemostat" })).toBe(true);
-    expect(isSupportedSimulationModel({ modelCardTitle: "Monod chemostat model" })).toBe(true);
-    expect(isSupportedSimulationModel({ systemType: "Monod growth kinetics" })).toBe(true);
+  it("supports explicit Monod chemostat model type", () => {
+    expect(isSupportedSimulationModel({ rawModelType: "monod_chemostat" })).toBe(true);
+    expect(getSupportedSimulationModelType({ rawModelType: "monod_chemostat" })).toBe(
+      "monod_chemostat",
+    );
   });
 
-  it("does not support non-chemostat models", () => {
-    expect(isSupportedSimulationModel({ modelType: "gas_liquid_transfer" })).toBe(false);
-    expect(isSupportedSimulationModel({ modelCardTitle: "Batch reactor first order" })).toBe(false);
+  it("supports explicit batch culture only when required parameters exist", () => {
+    expect(
+      getSupportedSimulationModelType({
+        rawModelType: "batch_culture",
+        parameters: [
+          { symbol: "mumax", value: 0.4 },
+          { symbol: "Ks", value: 0.1 },
+          { symbol: "Yxs", value: 0.5 },
+        ],
+      }),
+    ).toBe("batch_culture");
+    expect(
+      getSupportedSimulationModelType({
+        rawModelType: "batch_culture",
+        parameters: [{ symbol: "mumax", value: 0.4 }],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not support non-v1 or legacy implicit model metadata", () => {
+    expect(isSupportedSimulationModel({ rawModelType: "gas_liquid" })).toBe(false);
+    expect(isSupportedSimulationModel({ rawModelType: "oxygen_balanced_mixotrophy" })).toBe(false);
+    expect(isSupportedSimulationModel({ rawModelType: "pfr" })).toBe(false);
+    expect(isSupportedSimulationModel({ rawModelType: "cstr" })).toBe(false);
+    expect(isSupportedSimulationModel({ rawModelType: "unknown" })).toBe(false);
+    expect(isSupportedSimulationModel({ modelCardTitle: "Monod chemostat model" })).toBe(false);
     expect(isSupportedSimulationModel(null)).toBe(false);
   });
 
   it("exposes the unsupported simulation message", () => {
     expect(SIMULATION_UNSUPPORTED_MESSAGE).toBe(
-      "Simulation is currently available only for supported Monod/batch chemostat models. Download the scaffold instead.",
+      "Simulation for this model type is not yet supported. Use the scaffold/export instead.",
     );
   });
 });

@@ -19,6 +19,7 @@ import type {
   RawExtraction,
   ReproducibilityReport,
 } from "./reproducibility";
+import type { ModelAssemblyReport } from "./model-assembly";
 import type { UnitCheckReport } from "./unit-checker";
 import { generateJupyterNotebook } from "./notebook-generator";
 
@@ -39,6 +40,7 @@ export interface ModelPackageInput {
   limitationItems: AnalysisAssumption[];
   raw: RawExtraction | null;
   report: ReproducibilityReport;
+  assemblyReport?: ModelAssemblyReport;
   unitReport: UnitCheckReport;
   pythonCode: string;
   review?: {
@@ -93,7 +95,7 @@ function makeReadme(input: ModelPackageInput): string {
     title, projectName, providerUsed, systemType,
     systemDescription, problemStatement,
     equations, variables, parameters, assumptionItems, limitationItems,
-    report, unitReport, review,
+    report, assemblyReport, unitReport, review,
   } = input;
 
   const date = new Date().toISOString().slice(0, 10);
@@ -167,6 +169,10 @@ function makeReadme(input: ModelPackageInput): string {
   lines.push("");
   lines.push(`**Overall score:** ${report.overall_score}/100`);
   lines.push(`**Simulation readiness:** ${readinessLabel(report.simulation_readiness)}`);
+  if (assemblyReport) {
+    lines.push(`**Model assembly:** ${assemblyReport.assembly_status}`);
+    lines.push(`**Runnable model:** ${assemblyReport.can_generate_runnable_model ? "yes" : "no"}`);
+  }
   lines.push("");
   lines.push("| Sub-score | Value |");
   lines.push("|---|---|");
@@ -265,6 +271,10 @@ function makeReadme(input: ModelPackageInput): string {
   lines.push("| `assumptions.md` | Model assumptions from the source |");
   lines.push("| `limitations.md` | Model limitations from the source |");
   lines.push("| `missing_information.md` | Reproducibility gaps and recommended next steps |");
+  if (assemblyReport) {
+    lines.push("| `model_assembly_report.json` | Full model assembly readiness analysis (machine-readable) |");
+    lines.push("| `missing_requirements.md` | Source requests and missing model requirements |");
+  }
   lines.push("| `reproducibility_report.json` | Full reproducibility analysis (machine-readable) |");
   lines.push("| `unit_check_report.json` | Unit & dimension check results (machine-readable) |");
   lines.push("| `raw_extraction.json` | Raw extraction JSON from the provider |");
@@ -285,6 +295,17 @@ function makeReadme(input: ModelPackageInput): string {
     lines.push("");
   }
 
+  if (assemblyReport && assemblyReport.recommended_next_actions.length > 0) {
+    lines.push(hr("="));
+    lines.push("## Source requests");
+    lines.push(hr("="));
+    lines.push("");
+    for (let i = 0; i < assemblyReport.recommended_next_actions.length; i++) {
+      lines.push(`${i + 1}. ${assemblyReport.recommended_next_actions[i]}`);
+    }
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 
@@ -293,7 +314,7 @@ function makeModelCard(input: ModelPackageInput): string {
     title, projectName, providerUsed, domain, systemType,
     systemDescription, problemStatement,
     equations, variables, parameters, assumptionItems, limitationItems,
-    raw, report, unitReport,
+    raw, report, assemblyReport, unitReport,
   } = input;
 
   const date = new Date().toISOString().slice(0, 10);
@@ -309,6 +330,10 @@ function makeModelCard(input: ModelPackageInput): string {
   if (systemType) lines.push(`| System type | ${systemType} |`);
   lines.push(`| Provider | ${providerUsed} |`);
   lines.push(`| Reproducibility | ${report.overall_score}/100 |`);
+  if (assemblyReport) {
+    lines.push(`| Assembly status | ${assemblyReport.assembly_status} |`);
+    lines.push(`| Runnable from current source | ${assemblyReport.can_generate_runnable_model ? "yes" : "no"} |`);
+  }
   lines.push(`| Simulation readiness | ${report.simulation_readiness} |`);
   lines.push(`| Unit check | ${unitReport.unit_check_status} |`);
   lines.push(`| Generated | ${date} |`);
@@ -561,6 +586,57 @@ function makeMissingInfoMd(report: ReproducibilityReport): string {
   return lines.join("\n");
 }
 
+function makeAssemblyMissingRequirementsMd(report: ModelAssemblyReport): string {
+  const lines: string[] = ["# Missing Requirements", ""];
+  lines.push("This report lists model assembly gaps detected from the current source only.");
+  lines.push("No missing values are invented here; provide another source, assumptions, code, or calibration data before treating the model as runnable.");
+  lines.push("");
+  lines.push(`**Assembly status:** ${report.assembly_status}`);
+  lines.push(`**Target model type:** ${report.target_model_type}`);
+  lines.push(`**Runnable model can be generated:** ${report.can_generate_runnable_model ? "yes" : "no"}`);
+  lines.push(`**Scaffold can be generated:** ${report.can_generate_scaffold ? "yes" : "no"}`);
+  lines.push("");
+
+  const critical = report.missing_requirements.filter((item) => item.severity === "critical");
+  if (critical.length > 0) {
+    lines.push("## Critical Missing Requirements");
+    lines.push("");
+    for (const item of critical) {
+      lines.push(`- **${item.item}**`);
+      lines.push(`  - Category: ${item.category}`);
+      lines.push(`  - Why needed: ${item.why_needed}`);
+      lines.push(`  - Suggested source: ${item.suggested_source}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## All Missing Items");
+  lines.push("");
+  if (report.missing_requirements.length === 0) {
+    lines.push("No missing assembly requirements detected.");
+  } else {
+    lines.push("| Severity | Category | Item | Why needed | Suggested source |");
+    lines.push("|---|---|---|---|---|");
+    for (const item of report.missing_requirements) {
+      lines.push(
+        `| ${item.severity} | ${item.category} | ${item.item} | ${item.why_needed} | ${item.suggested_source} |`,
+      );
+    }
+  }
+  lines.push("");
+
+  if (report.recommended_next_actions.length > 0) {
+    lines.push("## Recommended Next Actions");
+    lines.push("");
+    for (let i = 0; i < report.recommended_next_actions.length; i++) {
+      lines.push(`${i + 1}. ${report.recommended_next_actions[i]}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 function makeRequirementsTxt(): string {
   return [
     "# Python dependencies for ChemAI Model Compiler simulation template",
@@ -651,7 +727,7 @@ function makeSourceExcerpt(
 export function generateModelPackage(
   input: ModelPackageInput
 ): Record<string, string> {
-  const { equations, variables, parameters, assumptionItems, limitationItems, raw, report, unitReport, pythonCode } = input;
+  const { equations, variables, parameters, assumptionItems, limitationItems, raw, report, assemblyReport, unitReport, pythonCode } = input;
 
   const files: Record<string, string> = {};
 
@@ -663,6 +739,10 @@ export function generateModelPackage(
   files["assumptions.md"]              = makeAssumptionsMd(assumptionItems);
   files["limitations.md"]              = makeLimitationsMd(limitationItems);
   files["missing_information.md"]      = makeMissingInfoMd(report);
+  if (assemblyReport) {
+    files["model_assembly_report.json"] = JSON.stringify(assemblyReport, null, 2);
+    files["missing_requirements.md"]    = makeAssemblyMissingRequirementsMd(assemblyReport);
+  }
   files["reproducibility_report.json"] = JSON.stringify(report, null, 2);
   files["unit_check_report.json"]      = JSON.stringify(unitReport, null, 2);
   files["raw_extraction.json"]         = raw != null

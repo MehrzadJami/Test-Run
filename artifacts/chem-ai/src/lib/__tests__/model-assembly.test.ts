@@ -352,12 +352,13 @@ describe("analyzeModelAssembly", () => {
     expect(available).toContain("PFD / incident light intensity");
   });
 
-  it("flags missing kinetic, light, Henry-law, initial-condition, and controller requirements", () => {
+  it("flags missing kinetic, light, Henry-law, initial-condition, calibration, and controller requirements", () => {
     const report = analyzeModelAssembly(abiusiLikeInput());
     const items = missingItems(report);
     const categories = report.missing_requirements.map((item) => item.category);
 
     expect(items).toContain("Kinetic constants for growth and uptake");
+    expect(items).toContain("Calibration data or accepted parameter assumptions");
     expect(items).toContain("Light attenuation parameters");
     expect(items).toContain("Henry-law convention");
     expect(items).toContain("Initial conditions");
@@ -368,7 +369,8 @@ describe("analyzeModelAssembly", () => {
         "light_model",
         "gas_transfer",
         "initial_condition",
-        "control_parameter",
+        "calibration_required",
+        "controller",
       ]),
     );
   });
@@ -387,6 +389,12 @@ describe("analyzeModelAssembly", () => {
     );
     expect(report.recommended_next_actions).toContain(
       "Provide kinetic constants or allow calibration",
+    );
+    expect(report.recommended_next_actions).toContain(
+      "Upload experimental CSV for calibration or provide parameter assumptions",
+    );
+    expect(report.recommended_next_actions).toContain(
+      "Upload existing control code if controller logic is already implemented",
     );
   });
 
