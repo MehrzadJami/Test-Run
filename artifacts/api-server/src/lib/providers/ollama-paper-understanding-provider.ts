@@ -28,6 +28,7 @@ export type OllamaPaperUnderstandingOutput = {
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL = "llama3.1";
+const OLLAMA_TIMEOUT_MS = 120_000; // 2 minutes — local models can be slow
 
 function tryRepairJson(raw: unknown): unknown {
   if (typeof raw !== "string") return raw;
@@ -75,7 +76,7 @@ function chunkSourceText(sourceText: string): PaperUnderstandingDocumentChunk[] 
 }
 
 function ollamaUnavailableMessage(baseUrl: string): string {
-  return `Ollama is unavailable at ${baseUrl}. Start Ollama with 'ollama serve' and pull/configure the model, or use Rule-based, OpenAI, Gemini, or Mock.`;
+  return `Ollama is unavailable at ${baseUrl}. Start Ollama with 'ollama serve' and pull/configure the model, use Rule-based/OpenAI/Gemini/Groq, or explicitly choose Mock demo mode.`;
 }
 
 export class OllamaPaperUnderstandingProvider implements ExtractionProvider {
@@ -100,6 +101,9 @@ export class OllamaPaperUnderstandingProvider implements ExtractionProvider {
     const prompt = buildPaperUnderstandingPrompt(documentChunks);
     const combinedPrompt = `${prompt.systemPrompt}\n\n${prompt.userPrompt}\n\nReturn strict JSON only.`;
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}/api/generate`, {
@@ -111,13 +115,22 @@ export class OllamaPaperUnderstandingProvider implements ExtractionProvider {
           stream: false,
           format: "json",
         }),
+        signal: controller.signal,
       });
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          `Ollama request timed out after ${OLLAMA_TIMEOUT_MS / 1000}s at ${this.baseUrl}. ` +
+            "The model may be slow to respond — try a smaller/faster model or increase the timeout.",
+        );
+      }
       throw new Error(
         `${ollamaUnavailableMessage(this.baseUrl)} ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (!res.ok) {

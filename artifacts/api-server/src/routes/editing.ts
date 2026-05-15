@@ -8,7 +8,7 @@
 // rawExtractionJson is NEVER touched here — it is the immutable AI output.
 
 import { Router, type IRouter, type Response } from "express";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   db,
   variablesTable,
@@ -136,19 +136,28 @@ router.patch("/variables/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const originalValue =
-    current.editedByUser ? current.originalValue : { ...current };
+  // Lock the row and capture the snapshot atomically so a concurrent edit
+  // cannot overwrite the true-original value.
+  const updated = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(variablesTable)
+      .where(eq(variablesTable.id, params.data.id))
+      .for("update");
+    if (!locked) return null;
+    const originalValue = locked.editedByUser ? locked.originalValue : { ...locked };
+    const [row] = await tx
+      .update(variablesTable)
+      .set({ ...body.data, editedByUser: true, originalValue })
+      .where(eq(variablesTable.id, params.data.id))
+      .returning();
+    return row;
+  });
 
-  const [updated] = await db
-    .update(variablesTable)
-    .set({
-      ...body.data,
-      editedByUser: true,
-      originalValue,
-    })
-    .where(eq(variablesTable.id, params.data.id))
-    .returning();
-
+  if (!updated) {
+    res.status(404).json({ error: "Variable not found" });
+    return;
+  }
   res.json(updated);
 });
 
@@ -179,29 +188,38 @@ router.post("/variables/:id/reset", async (req, res): Promise<void> => {
     return;
   }
 
-  if (!current.editedByUser || !current.originalValue) {
-    res.json(current);
+  const updated = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(variablesTable)
+      .where(eq(variablesTable.id, params.data.id))
+      .for("update");
+    if (!locked) return null;
+    if (!locked.editedByUser || !locked.originalValue) return locked;
+
+    const snap = locked.originalValue as Record<string, unknown>;
+    const [row] = await tx
+      .update(variablesTable)
+      .set({
+        symbol: typeof snap["symbol"] === "string" ? snap["symbol"] : locked.symbol,
+        name: typeof snap["name"] === "string" ? snap["name"] : locked.name,
+        meaning: typeof snap["meaning"] === "string" ? snap["meaning"] : locked.meaning,
+        unit: typeof snap["unit"] === "string" ? snap["unit"] : locked.unit,
+        role: (snap["role"] as "state" | "input" | "output" | "parameter" | "control") ?? locked.role,
+        confidence: (snap["confidence"] as "high" | "medium" | "low") ?? locked.confidence,
+        sourceQuote: typeof snap["sourceQuote"] === "string" ? snap["sourceQuote"] : locked.sourceQuote,
+        editedByUser: false,
+        originalValue: null,
+      })
+      .where(eq(variablesTable.id, params.data.id))
+      .returning();
+    return row;
+  });
+
+  if (!updated) {
+    res.status(404).json({ error: "Variable not found" });
     return;
   }
-
-  const snap = current.originalValue as Record<string, unknown>;
-
-  const [updated] = await db
-    .update(variablesTable)
-    .set({
-      symbol: typeof snap["symbol"] === "string" ? snap["symbol"] : current.symbol,
-      name: typeof snap["name"] === "string" ? snap["name"] : current.name,
-      meaning: typeof snap["meaning"] === "string" ? snap["meaning"] : current.meaning,
-      unit: typeof snap["unit"] === "string" ? snap["unit"] : current.unit,
-      role: (snap["role"] as "state" | "input" | "output") ?? current.role,
-      confidence: (snap["confidence"] as "high" | "medium" | "low") ?? current.confidence,
-      sourceQuote: typeof snap["sourceQuote"] === "string" ? snap["sourceQuote"] : current.sourceQuote,
-      editedByUser: false,
-      originalValue: null,
-    })
-    .where(eq(variablesTable.id, params.data.id))
-    .returning();
-
   res.json(updated);
 });
 
@@ -237,19 +255,42 @@ router.patch("/parameters/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const originalValue =
-    current.editedByUser ? current.originalValue : { ...current };
+  // If a value key was provided it must be a finite number — null/NaN/Infinity
+  // are silently ignored by the DB update, so we surface a clear 400 instead.
+  if ("value" in body.data && (body.data.value === null || body.data.value === undefined || !Number.isFinite(body.data.value as number))) {
+    res.status(400).json({ error: "value must be a finite number." });
+    return;
+  }
 
-  const [updated] = await db
-    .update(parametersTable)
-    .set({
-      ...body.data,
-      editedByUser: true,
-      originalValue,
-    })
-    .where(eq(parametersTable.id, params.data.id))
-    .returning();
+  // Lock the row and capture the snapshot atomically.
+  const updated = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(parametersTable)
+      .where(eq(parametersTable.id, params.data.id))
+      .for("update");
+    if (!locked) return null;
+    const originalValue = locked.editedByUser ? locked.originalValue : { ...locked };
+    const nextValue =
+      typeof body.data.value === "number" && Number.isFinite(body.data.value)
+        ? {
+            value: body.data.value,
+            valueRaw: String(body.data.value),
+            valueNumeric: body.data.value,
+          }
+        : {};
+    const [row] = await tx
+      .update(parametersTable)
+      .set({ ...body.data, ...nextValue, editedByUser: true, originalValue })
+      .where(eq(parametersTable.id, params.data.id))
+      .returning();
+    return row;
+  });
 
+  if (!updated) {
+    res.status(404).json({ error: "Parameter not found" });
+    return;
+  }
   res.json(updated);
 });
 
@@ -293,6 +334,11 @@ router.post("/parameters/:id/reset", async (req, res): Promise<void> => {
       symbol: typeof snap["symbol"] === "string" ? snap["symbol"] : current.symbol,
       name: typeof snap["name"] === "string" ? snap["name"] : current.name,
       value: typeof snap["value"] === "number" ? snap["value"] : current.value,
+      valueRaw: typeof snap["valueRaw"] === "string" ? snap["valueRaw"] : current.valueRaw,
+      valueNumeric:
+        typeof snap["valueNumeric"] === "number" || snap["valueNumeric"] === null
+          ? snap["valueNumeric"]
+          : current.valueNumeric,
       unit: typeof snap["unit"] === "string" ? snap["unit"] : current.unit,
       confidence: (snap["confidence"] as "high" | "medium" | "low") ?? current.confidence,
       sourceQuote: typeof snap["sourceQuote"] === "string" ? snap["sourceQuote"] : current.sourceQuote,
@@ -337,14 +383,18 @@ router.patch("/equations/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const originalValue =
-    current.editedByUser ? current.originalValue : { ...current };
-
-  // Recompute description from the merged label/meaning/plaintext
+  // Recompute description from the merged label/meaning/plaintext and reject if empty.
   const newLabel = body.data.label ?? current.label;
   const newMeaning = body.data.meaning ?? current.meaning;
   const newPlaintext = body.data.plaintext ?? current.plaintext;
   const description = buildDescription(newLabel, newMeaning, newPlaintext);
+  if (!description.trim()) {
+    res.status(400).json({ error: "Equation must have at least a label, meaning, or plaintext description." });
+    return;
+  }
+
+  const originalValue =
+    current.editedByUser ? current.originalValue : { ...current };
 
   const [updated] = await db
     .update(equationsTable)
@@ -408,6 +458,15 @@ router.post("/equations/:id/reset", async (req, res): Promise<void> => {
       variablesInvolved: Array.isArray(snap["variablesInvolved"])
         ? (snap["variablesInvolved"] as string[])
         : current.variablesInvolved,
+      equationType:
+        (snap["equationType"] as
+          | "dynamic_ode"
+          | "algebraic_calculation"
+          | "stoichiometric_reaction"
+          | "empirical_correlation"
+          | "reported_experimental_result"
+          | "control_law"
+          | "unknown") ?? current.equationType,
       confidence: (snap["confidence"] as "high" | "medium" | "low") ?? current.confidence,
       sourceQuote: typeof snap["sourceQuote"] === "string" ? snap["sourceQuote"] : current.sourceQuote,
       description: buildDescription(label, meaning, plaintext),

@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCreateProject,
   useAddSourceDocument,
@@ -61,6 +61,32 @@ import {
   parsedPdfNeedsFallback,
   type ParsedPdfForExtraction,
 } from "@/lib/pdf-extraction-flow";
+import {
+  extractionSubmitStepLabel,
+  releaseSubmitLock,
+  tryAcquireSubmitLock,
+  type ExtractionSubmitStep,
+} from "@/lib/extraction-submit-guard";
+
+type ExtractionFailureDetails = {
+  validationIssues?: string[];
+  debugArtifactPath?: string;
+  validationStage?: string;
+  model?: string;
+  promptVersion?: string;
+  schemaVersion?: string;
+  responseFormatMode?: string;
+};
+
+class ExtractionApiError extends Error {
+  constructor(
+    message: string,
+    readonly details?: ExtractionFailureDetails,
+  ) {
+    super(message);
+    this.name = "ExtractionApiError";
+  }
+}
 
 // ─── Demo source texts ────────────────────────────────────────────────────────
 
@@ -189,6 +215,51 @@ const PREVIEW_CHARS = 1800;
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_OLLAMA_MODEL = "llama3.1:8b";
 
+type ProviderStatus = {
+  groq?: {
+    available: boolean;
+    reason: string;
+    model: string;
+    freeTierMode: boolean;
+    limits: {
+      maxChunksPerExtraction: number;
+      maxTokensPerExtraction: number;
+      maxExtractionsPerDay: number;
+      maxInputTokensPerRequest: number;
+      maxOutputTokensPerRequest: number;
+    };
+    usageToday: {
+      requests: number;
+      estimatedTokens: number;
+      extractions: number;
+    };
+  };
+  autoProvider?: string;
+};
+
+function estimateGroqPdfCost(parsedPdf: ParsedPdf | null, status?: ProviderStatus) {
+  const groq = status?.groq;
+  const chunks = parsedPdf?.structuredDocument?.chunks ?? [];
+  if (!parsedPdf || !groq || chunks.length === 0) return null;
+  const selectedChunks = Math.min(chunks.length, groq.limits.maxChunksPerExtraction);
+  const selectedText = chunks
+    .slice(0, selectedChunks)
+    .map((chunk) => chunk.text)
+    .join("\n\n");
+  const estimatedInputTokens = Math.ceil(selectedText.length / 4);
+  const estimatedTotalTokens = estimatedInputTokens + groq.limits.maxOutputTokensPerRequest;
+  return {
+    selectedChunks,
+    totalChunks: chunks.length,
+    estimatedInputTokens,
+    estimatedTotalTokens,
+    fitsBudget:
+      estimatedInputTokens <= groq.limits.maxInputTokensPerRequest &&
+      estimatedTotalTokens <= groq.limits.maxTokensPerExtraction &&
+      groq.usageToday.extractions < groq.limits.maxExtractionsPerDay,
+  };
+}
+
 export default function NewExtraction() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
@@ -224,16 +295,33 @@ export default function NewExtraction() {
   const [isParsing, setIsParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [showFullPreview, setShowFullPreview] = useState(false);
+  const [submitLocked, setSubmitLocked] = useState(false);
+  const [submitStep, setSubmitStep] = useState<ExtractionSubmitStep>("idle");
+  const [extractionFailure, setExtractionFailure] = useState<{
+    message: string;
+    details?: ExtractionFailureDetails;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const submitLockRef = useRef(false);
 
   // ── Mutations ───────────────────────────────────────────────────────────────
   const createProject = useCreateProject();
   const addSource = useAddSourceDocument();
   const createExtraction = useCreateExtraction();
+  const providerStatus = useQuery<ProviderStatus>({
+    queryKey: ["provider-status"],
+    queryFn: async () => {
+      const response = await fetch("/api/providers/status");
+      if (!response.ok) throw new Error("Provider status unavailable");
+      return (await response.json()) as ProviderStatus;
+    },
+    staleTime: 30_000,
+  });
 
   const isBusy =
     isParsing ||
+    submitLocked ||
     createProject.isPending ||
     addSource.isPending ||
     createExtraction.isPending;
@@ -247,6 +335,8 @@ export default function NewExtraction() {
     localStorage.getItem("chemai_ollama_model") !== null;
   const hasExplicitOllamaConfig =
     hasStoredOllamaConfig && ollamaBaseUrl.trim().length > 0;
+  const hasGroqConfigured = providerStatus.data?.groq?.available === true;
+  const groqEstimate = estimateGroqPdfCost(parsedPdf, providerStatus.data);
   const shouldSendOllamaHeaders =
     selectedProvider === "ollama" ||
     (selectedProvider === "auto" && hasExplicitOllamaConfig);
@@ -259,6 +349,7 @@ export default function NewExtraction() {
     selectedProvider === "auto" &&
     !hasOpenAiKey &&
     !hasGeminiKey &&
+    !hasGroqConfigured &&
     !hasExplicitOllamaConfig;
 
   useEffect(() => {
@@ -402,35 +493,42 @@ export default function NewExtraction() {
 
   // ── Extraction submit ───────────────────────────────────────────────────────
   async function handleExtract() {
+    if (!tryAcquireSubmitLock(submitLockRef)) return;
+    setSubmitLocked(true);
+    setSubmitStep("creating_project");
+    setExtractionFailure(null);
+    let keepLockedForNavigation = false;
+
     const sourceContent = getSourceContent();
     const isUpload = activeTab === "upload";
 
-    if (!sourceContent.trim()) {
-      toast({
-        title: "No source provided",
-        description: isUpload
-          ? parsedPdf === null
-            ? "Upload a PDF or .txt file first."
-            : "No text was extracted from the PDF."
-          : "Paste source text first, or load a demo.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const fallbackTitle = isUpload
-      ? (parsedPdf?.name ?? uploadedFile?.name ?? "Untitled extraction")
-      : (sourceContent.split(/\r?\n/).find((l) => l.trim()) ??
-          "Untitled extraction"
-        ).slice(0, 80);
-
-    const projectName = title.trim() || fallbackTitle;
-
     try {
+      if (!sourceContent.trim()) {
+        toast({
+          title: "No source provided",
+          description: isUpload
+            ? parsedPdf === null
+              ? "Upload a PDF or .txt file first."
+              : "No text was extracted from the PDF."
+            : "Paste source text first, or load a demo.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const fallbackTitle = isUpload
+        ? (parsedPdf?.name ?? uploadedFile?.name ?? "Untitled extraction")
+        : (sourceContent.split(/\r?\n/).find((l) => l.trim()) ??
+            "Untitled extraction"
+          ).slice(0, 80);
+
+      const projectName = title.trim() || fallbackTitle;
+
       const project = await createProject.mutateAsync({
         data: { name: projectName, description: "" },
       });
 
+      setSubmitStep("saving_source");
       const sourcePayload =
         parsedPdf && isUpload
           ? buildParsedPdfSourcePayload(parsedPdf)
@@ -443,6 +541,7 @@ export default function NewExtraction() {
         projectId: project.id,
         data: sourcePayload,
       });
+      setSubmitStep("extracting_model");
       const extractionRes = await fetch(`/api/projects/${project.id}/extractions`, {
         method: "POST",
         headers: {
@@ -459,8 +558,11 @@ export default function NewExtraction() {
         body: JSON.stringify({ provider: selectedProvider }),
       });
       if (!extractionRes.ok) {
-        const data = (await extractionRes.json()) as { error?: string };
-        throw new Error(data.error ?? "Extraction failed");
+        const data = (await extractionRes.json()) as {
+          error?: string;
+          details?: ExtractionFailureDetails;
+        };
+        throw new ExtractionApiError(data.error ?? "Extraction failed", data.details);
       }
 
       await queryClient.invalidateQueries({
@@ -472,8 +574,20 @@ export default function NewExtraction() {
         description: `Created model card for "${projectName}".`,
       });
 
+      setSubmitStep("opening_model_card");
+      keepLockedForNavigation = true;
       navigate(`/model-cards/${project.id}`);
     } catch (err) {
+      if (err instanceof ExtractionApiError) {
+        setExtractionFailure({
+          message: err.message,
+          details: err.details,
+        });
+      } else if (err instanceof Error) {
+        setExtractionFailure({ message: err.message });
+      } else {
+        setExtractionFailure({ message: "Unknown error talking to the API." });
+      }
       toast({
         title: "Extraction failed",
         description:
@@ -482,6 +596,12 @@ export default function NewExtraction() {
             : "Unknown error talking to the API.",
         variant: "destructive",
       });
+    } finally {
+      if (!keepLockedForNavigation) {
+        releaseSubmitLock(submitLockRef);
+        setSubmitLocked(false);
+        setSubmitStep("idle");
+      }
     }
   }
 
@@ -592,8 +712,8 @@ export default function NewExtraction() {
               <li key={point}>{point}</li>
             ))}
           </ul>
-          <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-            Configure OpenAI, Gemini, or a local provider to analyze source text.
+        <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+            Configure OpenAI, Gemini, Groq, or a local provider to analyze source text.
           </p>
         </div>
       </div>
@@ -912,8 +1032,8 @@ export default function NewExtraction() {
                   <p className="text-xs text-muted-foreground flex items-start gap-1.5">
                     <Zap className="h-3 w-3 mt-0.5 shrink-0" />
                     {autoWillUseRuleBasedFirst
-                      ? "Auto will use Rule-based local mode, then fall back to Mock if needed."
-                      : "Auto tries configured providers first, then Rule-based local mode, then Mock if needed."}
+                      ? "Auto will use Rule-based local mode. Mock is explicit demo mode only."
+                      : "Auto tries configured providers first, then Rule-based local mode. Mock is explicit demo mode only."}
                   </p>
                 )}
                 {selectedProvider === "openai" && (
@@ -928,11 +1048,39 @@ export default function NewExtraction() {
                     Uses the Gemini key configured in this browser for this extraction.
                   </p>
                 )}
+                {selectedProvider === "groq" && (
+                  <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-sky-500 mt-1.5" />
+                    {providerStatus.data?.groq?.available
+                      ? `Groq configured on the server using ${providerStatus.data.groq.model}. Paper text is sent to Groq cloud AI.`
+                      : "Groq API key missing on the server. Set GROQ_API_KEY to use this provider."}
+                  </p>
+                )}
                 {selectedProvider === "ollama" && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-500" />
                     Requires a reachable local Ollama server.
                   </p>
+                )}
+                {providerStatus.data?.groq && (
+                  <div className="rounded-md border border-sky-500/25 bg-sky-500/5 p-3 text-xs text-muted-foreground space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-foreground">Groq status</span>
+                      <Badge variant="outline" className="text-[10px]">
+                        {providerStatus.data.groq.available
+                          ? "Groq configured"
+                          : "Groq API key missing"}
+                      </Badge>
+                    </div>
+                    <p>
+                      Free-tier mode {providerStatus.data.groq.freeTierMode ? "on" : "off"}: max {providerStatus.data.groq.limits.maxChunksPerExtraction} chunks, {providerStatus.data.groq.limits.maxTokensPerExtraction.toLocaleString()} tokens per extraction, {providerStatus.data.groq.limits.maxExtractionsPerDay} extractions/day.
+                    </p>
+                    {groqEstimate && parsedPdf && (
+                      <p>
+                        PDF estimate: {groqEstimate.selectedChunks}/{groqEstimate.totalChunks} chunks, ~{groqEstimate.estimatedTotalTokens.toLocaleString()} tokens, {groqEstimate.fitsBudget ? "fits current budget" : "would exceed current budget"}.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -972,12 +1120,16 @@ export default function NewExtraction() {
                 ) : isBusy ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {parsedPdf
+                    {submitStep !== "idle"
+                      ? extractionSubmitStepLabel(submitStep)
+                      : parsedPdf
                       ? "Extracting model from PDF..."
                       : isMockDemoProvider
                       ? "Running Mock demo…"
                       : isRuleBasedProvider
                       ? "Running rule-based local extraction…"
+                      : selectedProvider === "groq"
+                      ? "Running Groq paper understanding…"
                       : "Running extraction…"}
                   </>
                 ) : parsedPdf ? (
@@ -988,17 +1140,51 @@ export default function NewExtraction() {
               </Button>
               {isBusy && !isParsing && !isMockDemoProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
-                  {isRuleBasedProvider
+                  {submitStep !== "idle"
+                    ? extractionSubmitStepLabel(submitStep)
+                    : isRuleBasedProvider
                     ? parsedPdf
                       ? "Extracting model from PDF..."
                       : "Extracting obvious equations, parameters, and units with deterministic local patterns…"
-                    : "Running the selected provider. Auto uses Rule-based local mode before Mock when no configured provider is available."}
+                    : selectedProvider === "groq"
+                    ? "Using server-side Groq with conservative free-tier chunk and token limits…"
+                    : "Running the selected provider. Auto uses Rule-based local mode when no configured provider is available; Mock is explicit demo mode only."}
                 </p>
               )}
               {isBusy && !isParsing && isMockDemoProvider && (
                 <p className="text-xs text-center text-muted-foreground animate-pulse">
                   Creating project and loading fixed MockProvider demo output…
                 </p>
+              )}
+              {extractionFailure && (
+                <div className="w-full rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive space-y-2">
+                  <p className="font-medium">{extractionFailure.message}</p>
+                  {extractionFailure.details?.validationIssues?.length ? (
+                    <div className="space-y-1">
+                      <p className="font-medium">Top validation issues</p>
+                      <ul className="list-disc pl-4 space-y-1">
+                        {extractionFailure.details.validationIssues.slice(0, 5).map((issue) => (
+                          <li key={issue}>{issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {extractionFailure.details?.debugArtifactPath ? (
+                    <p>
+                      Debug artifact:{" "}
+                      <code className="break-all">
+                        {extractionFailure.details.debugArtifactPath}
+                      </code>
+                    </p>
+                  ) : null}
+                  {(extractionFailure.details?.promptVersion ||
+                    extractionFailure.details?.schemaVersion) ? (
+                    <p className="text-destructive/80">
+                      Prompt/schema: {extractionFailure.details.promptVersion ?? "unknown"} /{" "}
+                      {extractionFailure.details.schemaVersion ?? "unknown"}
+                    </p>
+                  ) : null}
+                </div>
               )}
             </CardFooter>
           </Card>

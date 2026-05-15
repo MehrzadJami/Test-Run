@@ -48,6 +48,7 @@ import {
   Share2,
   Check,
   Copy,
+  Bot,
 } from "lucide-react";
 import {
   analyzeReproducibility,
@@ -70,9 +71,16 @@ import { generateJupyterNotebook } from "@/lib/notebook-generator";
 import { buildAggregatedModelCard, detectConflicts } from "@/lib/multi-source";
 import { matchTemplates, type TemplateScanResult, type RunnableTemplateStatus } from "@/lib/template-matcher";
 import { generateModelPackage } from "@/lib/package-generator";
-import { isMockProvider, MOCK_PROVIDER_WARNING } from "@/lib/mock-provider-disclosure";
 import {
-  isSupportedSimulationModel,
+  GROQ_PROVIDER_NOTICE,
+  GROQ_RULE_BASED_FALLBACK_WARNING,
+  isMockProvider,
+  isRuleBasedProvider,
+  MOCK_PROVIDER_WARNING,
+  RULE_BASED_DIRECT_WARNING,
+} from "@/lib/mock-provider-disclosure";
+import {
+  getSupportedSimulationModelType,
   SIMULATION_UNSUPPORTED_MESSAGE,
 } from "@/lib/simulation-support";
 import { generateLiteratureSearchSuggestions } from "@/lib/literature-search-assistant";
@@ -82,6 +90,10 @@ import { EquationsTab } from "@/components/model-card/EquationsTab";
 import { AssumptionsTab } from "@/components/model-card/AssumptionsTab";
 import { AuditTrailTab } from "@/components/model-card/AuditTrailTab";
 import { DomainChecklistTab } from "@/components/model-card/DomainChecklistTab";
+import { ChemEBrainTab } from "@/components/model-card/ChemEBrainTab";
+import { buildChemEBrainDisplayModel } from "@/lib/cheme-brain-report";
+import { decideChemEBrainSimulationReadiness } from "@/lib/cheme-brain-readiness";
+import { CHEME_BRAIN_READINESS_AUTHORITY_ENABLED } from "@/lib/feature-flags";
 import { MODEL_TYPE_DISPLAY_NAMES, normalizeModelType } from "@workspace/domain-classifier";
 
 // ─── Local raw-extraction passthrough types ────────────────────────────────────
@@ -532,9 +544,9 @@ function ModelCardDetailInner({
     createdAt: Date | string;
     updatedAt: Date | string;
   };
-  equations: { id: number; ordinal: number; label: string; latex: string; plaintext: string; meaning: string; variablesInvolved: string[]; confidence: string; description: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
+  equations: { id: number; ordinal: number; label: string; latex: string; plaintext: string; meaning: string; variablesInvolved: string[]; equationType?: string | null; confidence: string; description: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
   variables: { id: number; ordinal: number; symbol: string; name: string; meaning: string; unit: string; role: string; confidence: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
-  parameters: { id: number; ordinal: number; symbol: string; name: string; value: number; unit: string; confidence: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
+  parameters: { id: number; ordinal: number; symbol: string; name: string; value: number; valueRaw?: string | null; valueNumeric?: number | null; unit: string; confidence: string; sourceQuote: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
   assumptionItems: { id: number; ordinal: number; kind: string; text: string; sourceQuote: string; confidence: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
   limitationItems: { id: number; ordinal: number; kind: string; text: string; sourceQuote: string; confidence: string; editedByUser: boolean; originalValue?: Record<string, unknown> | null }[];
   raw: RawExtraction | null | undefined;
@@ -547,7 +559,19 @@ function ModelCardDetailInner({
   const visibility = project?.visibility ?? "public";
   const isPublic = visibility === "public";
   const isMockModelCard = isMockProvider(extraction.providerUsed);
-  const supportsSimulation = isSupportedSimulationModel({
+  const providerFallbacks = Array.isArray(extraction.tokenUsage?.providerFallbacks)
+    ? extraction.tokenUsage.providerFallbacks
+    : [];
+  const groqFellBackToRuleBased =
+    extraction.providerUsed === "rule_based" &&
+    providerFallbacks.some(
+      (fallback) =>
+        fallback &&
+        typeof fallback === "object" &&
+        (fallback as { from?: unknown; to?: unknown }).from === "groq" &&
+        (fallback as { from?: unknown; to?: unknown }).to === "rule_based",
+    );
+  const legacySimulationModelType = getSupportedSimulationModelType({
     rawModelType: (raw as { model_type?: string | null } | null | undefined)?.model_type,
     modelCardModelType: raw?.model_card?.model_type,
     modelType: extraction.modelType,
@@ -557,9 +581,7 @@ function ModelCardDetailInner({
     domain: extraction.domain,
     parameters,
   });
-  const showSimulationControl = Boolean(
-    raw?.model_card?.can_generate_ode_template || supportsSimulation,
-  );
+  const legacySupportsSimulation = legacySimulationModelType !== null;
 
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
   const shareUrl = `${window.location.origin}${base}/share/model-cards/${extractionId}`;
@@ -631,6 +653,51 @@ function ModelCardDetailInner({
     [projectId, cardQuery_nonce(equations, variables, parameters)]
   );
 
+  // ── ChemE Brain shadow report (advisory only; no runtime decisions changed) ──
+  const chemEBrainDisplay = useMemo(
+    () =>
+      buildChemEBrainDisplayModel({
+        extraction: {
+          modelCardTitle: extraction.modelCardTitle,
+          providerUsed: extraction.providerUsed,
+          domain: extraction.domain,
+          systemDescription: extraction.systemDescription,
+          problemStatement: extraction.problemStatement,
+          modelType: extraction.modelType,
+          modelTypeOverride: extraction.modelTypeOverride,
+        },
+        equations,
+        variables,
+        parameters,
+        assumptionItems,
+        limitationItems,
+        raw: raw ?? null,
+        assemblyReport,
+        reproducibilityReport: report,
+        unitReport,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status, assemblyReport.assembly_status],
+  );
+  const chemEBrainReadiness = useMemo(
+    () =>
+      decideChemEBrainSimulationReadiness({
+        featureEnabled: CHEME_BRAIN_READINESS_AUTHORITY_ENABLED,
+        report: chemEBrainDisplay.report,
+        legacySupportedModelType: legacySimulationModelType,
+        parameters,
+        equations,
+        variables,
+        raw: raw ?? null,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, cardQuery_nonce(equations, variables, parameters), chemEBrainDisplay.verdict, legacySimulationModelType],
+  );
+  const supportsSimulation = chemEBrainReadiness.canRunSimulation;
+  const showSimulationControl = CHEME_BRAIN_READINESS_AUTHORITY_ENABLED
+    ? true
+    : Boolean(raw?.model_card?.can_generate_ode_template || legacySupportsSimulation);
+
   // ── Formal dimensional analysis — M21 (memoized) ─────────────────────────
   const formalReport = useMemo(
     () => runFormalDimensionalAnalysis(equations, variables, parameters),
@@ -662,9 +729,10 @@ function ModelCardDetailInner({
         report,
         unitReport,
         templateResult,
+        chemEBrainReport: chemEBrainDisplay.report,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status, templateResult]
+    [projectId, cardQuery_nonce(equations, variables, parameters), report.overall_score, unitReport.unit_check_status, templateResult, chemEBrainDisplay.verdict]
   );
 
   // ── Model Package download (M9) ─────────────────────────────────────────
@@ -842,6 +910,35 @@ function ModelCardDetailInner({
             </p>
           </div>
         ) : null}
+        {extraction.providerUsed === "groq" ? (
+          <div className="flex gap-3 rounded-lg border border-sky-500/40 bg-sky-500/10 p-4">
+            <Bot className="h-5 w-5 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-sky-800 dark:text-sky-300 leading-relaxed">
+              {GROQ_PROVIDER_NOTICE}
+            </p>
+          </div>
+        ) : null}
+        {groqFellBackToRuleBased ? (
+          <div
+            className="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+            data-testid="rule-based-fallback-banner"
+          >
+            <TriangleAlert className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
+              {GROQ_RULE_BASED_FALLBACK_WARNING}
+            </p>
+          </div>
+        ) : isRuleBasedProvider(extraction.providerUsed) ? (
+          <div
+            className="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+            data-testid="rule-based-direct-banner"
+          >
+            <TriangleAlert className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-800 dark:text-amber-300 leading-relaxed">
+              {RULE_BASED_DIRECT_WARNING}
+            </p>
+          </div>
+        ) : null}
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-primary mb-2">
@@ -916,7 +1013,7 @@ function ModelCardDetailInner({
                     variant="outline"
                     size="default"
                     disabled
-                    title={SIMULATION_UNSUPPORTED_MESSAGE}
+                    title={CHEME_BRAIN_READINESS_AUTHORITY_ENABLED ? chemEBrainReadiness.message : SIMULATION_UNSUPPORTED_MESSAGE}
                     data-testid="btn-run-simulation"
                   >
                     <Play className="h-4 w-4 mr-2" />
@@ -925,7 +1022,7 @@ function ModelCardDetailInner({
                 )}
                 {!supportsSimulation ? (
                   <p className="max-w-[220px] text-right text-xs text-muted-foreground">
-                    {SIMULATION_UNSUPPORTED_MESSAGE}
+                    {CHEME_BRAIN_READINESS_AUTHORITY_ENABLED ? chemEBrainReadiness.message : SIMULATION_UNSUPPORTED_MESSAGE}
                   </p>
                 ) : null}
               </div>
@@ -1011,6 +1108,9 @@ function ModelCardDetailInner({
                 ({assemblyReport.missing_requirements.filter((m) => m.severity === "critical").length})
               </span>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="cheme-brain" data-testid="tab-cheme-brain">
+            ChemE Brain
           </TabsTrigger>
           <TabsTrigger value="source-requests" data-testid="tab-source-requests">
             Complete Model
@@ -1380,6 +1480,14 @@ function ModelCardDetailInner({
               </ol>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ── ChemE Brain Shadow Report ── */}
+        <TabsContent value="cheme-brain" className="mt-6">
+          <ChemEBrainTab
+            display={chemEBrainDisplay}
+            providerUsed={extraction.providerUsed}
+          />
         </TabsContent>
 
         {/* ── Complete Model / Source Requests ── */}

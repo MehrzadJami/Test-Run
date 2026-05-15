@@ -35,7 +35,17 @@ export function canMutateProject(
   userId: string | undefined,
 ): boolean {
   if (isSeededDemoProject(project)) return false;
-  if (!project.ownerId) return false;
+  if (!project.ownerId) {
+    // Legacy ownerless projects: only allow anonymous mutation when BOTH conditions hold:
+    // 1. Not in production (safeguard against accidental staging exposure)
+    // 2. DEV_ALLOW_ANONYMOUS_MUTATIONS is explicitly opted-in
+    // This prevents staging/CI deployments from inadvertently granting world-write access.
+    const explicitDevOptIn =
+      process.env.DEV_ALLOW_ANONYMOUS_MUTATIONS === "true";
+    return (
+      process.env.NODE_ENV !== "production" && explicitDevOptIn && !userId
+    );
+  }
   return !!userId && project.ownerId === userId;
 }
 

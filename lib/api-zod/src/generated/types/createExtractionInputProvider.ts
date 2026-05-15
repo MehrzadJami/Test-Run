@@ -7,7 +7,7 @@
  */
 
 /**
- * AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. "mock" always uses deterministic mock output.
+ * AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Groq → Ollama → Rule-based depending on which providers are configured. "rule_based" uses deterministic local extraction. "mock" always uses fixed demo output.
  */
 export type CreateExtractionInputProvider =
   (typeof CreateExtractionInputProvider)[keyof typeof CreateExtractionInputProvider];
@@ -16,5 +16,8 @@ export const CreateExtractionInputProvider = {
   mock: "mock",
   openai: "openai",
   gemini: "gemini",
+  groq: "groq",
+  ollama: "ollama",
+  rule_based: "rule_based",
   auto: "auto",
 } as const;

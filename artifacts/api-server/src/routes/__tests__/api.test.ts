@@ -196,6 +196,89 @@ Assumptions: perfectly mixed, isothermal, constant volume.
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/projects/:id/sources — persists PDF structuredDocument with chunks", async () => {
+    const pdfProject = await request(app)
+      .post("/api/projects")
+      .set("Authorization", ownerAuth())
+      .send({ name: "Structured PDF source M43" });
+    const pdfProjectId = pdfProject.body.id;
+    const structuredDocument = {
+      title_guess: "Structured PDF Acceptance Fixture",
+      page_count: 2,
+      pages: [
+        {
+          page_number: 1,
+          text: "Abstract text",
+          char_count: 13,
+          word_count: 2,
+          has_equation_like_text: false,
+          has_table_like_text: false,
+        },
+      ],
+      sections: [
+        {
+          heading: "Materials and Methods",
+          page_start: 2,
+          page_end: 2,
+          text: "The oxygen balance is dC_O2/dt = kLa*(Cstar_O2 - C_O2).",
+        },
+      ],
+      chunks: [
+        {
+          chunk_id: "pdf_001",
+          page_start: 2,
+          page_end: 2,
+          section_heading: "Materials and Methods",
+          text: "The oxygen balance is dC_O2/dt = kLa*(Cstar_O2 - C_O2).",
+          char_count: 61,
+          contains_equation_like_text: true,
+          contains_table_like_text: false,
+          contains_figure_reference: false,
+        },
+      ],
+      diagnostics: {
+        text_quality: "good",
+        fallback_required: false,
+        message: null,
+        warnings: [],
+      },
+    };
+
+    const sourceRes = await request(app)
+      .post(`/api/projects/${pdfProjectId}/sources`)
+      .set("Authorization", ownerAuth())
+      .send({
+        kind: "pdf",
+        filename: "acceptance.pdf",
+        content: "The oxygen balance is dC_O2/dt = kLa*(Cstar_O2 - C_O2).",
+        structuredDocument,
+      });
+
+    expect(sourceRes.status).toBe(201);
+    expect(sourceRes.body.kind).toBe("pdf");
+    expect(sourceRes.body.structuredDocument.chunks[0]).toMatchObject({
+      chunk_id: "pdf_001",
+      page_start: 2,
+      section_heading: "Materials and Methods",
+      contains_equation_like_text: true,
+    });
+
+    const projectRes = await request(app)
+      .get(`/api/projects/${pdfProjectId}`)
+      .set("Authorization", ownerAuth());
+    expect(projectRes.status).toBe(200);
+    expect(projectRes.body.sourceDocuments[0]).toMatchObject({
+      kind: "pdf",
+      filename: "acceptance.pdf",
+    });
+    expect(projectRes.body.sourceDocuments[0].structuredDocument.chunks[0].section_heading)
+      .toBe("Materials and Methods");
+
+    await request(app)
+      .delete(`/api/projects/${pdfProjectId}`)
+      .set("Authorization", ownerAuth());
+  });
+
   it("POST /api/projects/:id/extractions — runs mock extraction and returns 201", async () => {
     const res = await request(app)
       .post(`/api/projects/${projectId}/extractions`)

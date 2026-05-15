@@ -1,5 +1,5 @@
-import { Router, type IRouter } from "express";
-import { eq, desc, asc, sql, or } from "drizzle-orm";
+import { Router, type IRouter, type Request } from "express";
+import { eq, desc, asc, sql, or, and, inArray } from "drizzle-orm";
 import {
   db,
   projectsTable,
@@ -32,12 +32,15 @@ import {
 import { classifyModel } from "@workspace/domain-classifier";
 import { normalizeExtractionModelTypes } from "../lib/model-type-compat";
 import { canMutateProject, canViewProject } from "../lib/access-control";
+import { extractDocumentChunks } from "../lib/structured-document";
 
 const router: IRouter = Router();
 const CreateExtractionBodyLocal = z.object({
-  provider: z.enum(["auto", "mock", "openai", "gemini", "ollama", "rule_based"]).optional(),
+  provider: z.enum(["auto", "mock", "openai", "gemini", "groq", "ollama", "rule_based"]).optional(),
   sourceDocumentId: z.number().int().positive().optional(),
 });
+const ACCESS_DENIED_HINT =
+  "Project was created under a different session/user. In local dev, enable DEV_AUTH_BYPASS or create an anonymous project.";
 
 // ---------- helpers ----------
 
@@ -80,6 +83,43 @@ async function loadModelCard(extractionId: number) {
   };
 }
 
+function reqSessionID(req: Request): string | null {
+  return (req as Request & { sessionID?: string }).sessionID ?? null;
+}
+
+function logProjectAccessDebug(
+  req: Request,
+  event: string,
+  project: { id: number; ownerId: string | null; visibility?: string | null },
+) {
+  if (process.env["DEBUG_ACCESS_CONTROL"] !== "true") return;
+  req.log.debug(
+    {
+      projectId: project.id,
+      projectOwnerId: project.ownerId,
+      projectVisibility: project.visibility ?? null,
+      requestUserId: req.user?.id ?? null,
+      reqSessionID: reqSessionID(req),
+    },
+    event,
+  );
+}
+
+function accessDeniedForProject(
+  project: { id: number; ownerId: string | null },
+  req: Request,
+) {
+  return {
+    error: "Access denied",
+    details: {
+      projectId: project.id,
+      hasOwner: project.ownerId !== null,
+      hasRequestUser: req.user?.id != null,
+      hint: ACCESS_DENIED_HINT,
+    },
+  };
+}
+
 // ---------- projects ----------
 
 router.get("/projects", async (req, res): Promise<void> => {
@@ -102,33 +142,52 @@ router.get("/projects", async (req, res): Promise<void> => {
     return;
   }
 
-  const summaries = await Promise.all(
-    projects.map(async (p) => {
-      const [{ count: sourceCount } = { count: 0 }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(sourceDocumentsTable)
-        .where(eq(sourceDocumentsTable.projectId, p.id));
+  const projectIds = projects.map((p) => p.id);
 
-      const [{ count: extractionCount } = { count: 0 }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(extractionsTable)
-        .where(eq(extractionsTable.projectId, p.id));
+  // Two aggregated queries instead of 3×N individual queries.
+  // Uses Drizzle's inArray for type-safe array binding.
+  const [countsRows, latestRows] = await Promise.all([
+    db
+      .select({
+        projectId: projectsTable.id,
+        sourceCount: sql<number>`count(distinct ${sourceDocumentsTable.id})::int`,
+        extractionCount: sql<number>`count(distinct ${extractionsTable.id})::int`,
+      })
+      .from(projectsTable)
+      .leftJoin(sourceDocumentsTable, eq(sourceDocumentsTable.projectId, projectsTable.id))
+      .leftJoin(extractionsTable, eq(extractionsTable.projectId, projectsTable.id))
+      .where(inArray(projectsTable.id, projectIds))
+      .groupBy(projectsTable.id),
 
-      const [latest] = await db
-        .select({ title: extractionsTable.modelCardTitle })
-        .from(extractionsTable)
-        .where(eq(extractionsTable.projectId, p.id))
-        .orderBy(desc(extractionsTable.createdAt))
-        .limit(1);
+    // DISTINCT ON is a PostgreSQL extension not in Drizzle's query builder.
+    db
+      .select({
+        projectId: extractionsTable.projectId,
+        title: extractionsTable.modelCardTitle,
+      })
+      .from(extractionsTable)
+      .where(inArray(extractionsTable.projectId, projectIds))
+      .orderBy(extractionsTable.projectId, desc(extractionsTable.createdAt))
+      .then((rows) => {
+        // De-duplicate: keep only the first (latest) row per project.
+        const seen = new Set<number>();
+        return rows.filter((r) => {
+          if (seen.has(r.projectId)) return false;
+          seen.add(r.projectId);
+          return true;
+        });
+      }),
+  ]);
 
-      return {
-        ...p,
-        sourceDocumentCount: Number(sourceCount) || 0,
-        extractionCount: Number(extractionCount) || 0,
-        latestExtractionTitle: latest?.title ?? null,
-      };
-    }),
-  );
+  const countMap = new Map(countsRows.map((r) => [r.projectId, r]));
+  const titleMap = new Map(latestRows.map((r) => [r.projectId, r.title]));
+
+  const summaries = projects.map((p) => ({
+    ...p,
+    sourceDocumentCount: countMap.get(p.id)?.sourceCount ?? 0,
+    extractionCount: countMap.get(p.id)?.extractionCount ?? 0,
+    latestExtractionTitle: titleMap.get(p.id) ?? null,
+  }));
 
   res.json(summaries);
 });
@@ -149,6 +208,7 @@ router.post("/projects", async (req, res): Promise<void> => {
       visibility: userId ? "private" : "public",
     })
     .returning();
+  logProjectAccessDebug(req, "Project created", project);
   res.status(201).json(project);
 });
 
@@ -169,7 +229,7 @@ router.get("/projects/:projectId", async (req, res): Promise<void> => {
     return;
   }
   if (!canViewProject(project, req.user?.id)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json(accessDeniedForProject(project, req));
     return;
   }
 
@@ -226,7 +286,7 @@ router.delete("/projects/:projectId", async (req, res): Promise<void> => {
     return;
   }
   if (!canMutateProject(project, req.user?.id)) {
-    res.status(403).json({ error: "Access denied" });
+    res.status(403).json(accessDeniedForProject(project, req));
     return;
   }
   await db.delete(projectsTable).where(eq(projectsTable.id, project.id));
@@ -255,7 +315,7 @@ router.patch(
       return;
     }
     if (!canMutateProject(project, req.user?.id)) {
-      res.status(403).json({ error: "Access denied" });
+      res.status(403).json(accessDeniedForProject(project, req));
       return;
     }
     const [updated] = await db
@@ -291,33 +351,48 @@ router.post(
       res.status(404).json({ error: "Project not found" });
       return;
     }
+    logProjectAccessDebug(req, "Project source upload permission check", project);
     if (!canMutateProject(project, req.user?.id)) {
-      res.status(403).json({ error: "Access denied" });
+      res.status(403).json(accessDeniedForProject(project, req));
       return;
     }
 
-    const [existingSource] = await db
-      .select({ id: sourceDocumentsTable.id })
-      .from(sourceDocumentsTable)
-      .where(eq(sourceDocumentsTable.projectId, project.id))
-      .limit(1);
-    if (existingSource) {
+    // Lock the project row to serialize concurrent source uploads and prevent
+    // the TOCTOU race where two requests both pass the duplicate check.
+    const doc = await db.transaction(async (tx) => {
+      await tx
+        .select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(eq(projectsTable.id, project.id))
+        .for("update");
+
+      const [existingSource] = await tx
+        .select({ id: sourceDocumentsTable.id })
+        .from(sourceDocumentsTable)
+        .where(eq(sourceDocumentsTable.projectId, project.id))
+        .limit(1);
+      if (existingSource) return "conflict" as const;
+
+      const [inserted] = await tx
+        .insert(sourceDocumentsTable)
+        .values({
+          projectId: project.id,
+          kind: parsed.data.kind,
+          filename: parsed.data.filename ?? null,
+          content: parsed.data.content,
+          structuredDocument: parsed.data.structuredDocument ?? null,
+        })
+        .returning();
+      return inserted;
+    });
+
+    if (doc === "conflict") {
       res.status(409).json({
         error:
           "This project already has a source document. Multi-source aggregation is not enabled yet. Create a new project for another source.",
       });
       return;
     }
-
-    const [doc] = await db
-      .insert(sourceDocumentsTable)
-      .values({
-        projectId: project.id,
-        kind: parsed.data.kind,
-        filename: parsed.data.filename ?? null,
-        content: parsed.data.content,
-      })
-      .returning();
     res.status(201).json(doc);
   },
 );
@@ -347,17 +422,27 @@ router.post(
       return;
     }
     if (!canMutateProject(project, req.user?.id)) {
-      res.status(403).json({ error: "Access denied" });
+      res.status(403).json(accessDeniedForProject(project, req));
       return;
     }
 
     // Pick the source document: explicit id, else most recent for the project.
     let source;
     if (body.data.sourceDocumentId != null) {
+      // Fetch by ID scoped to this project to prevent cross-project access.
       const [s] = await db
         .select()
         .from(sourceDocumentsTable)
-        .where(eq(sourceDocumentsTable.id, body.data.sourceDocumentId));
+        .where(
+          and(
+            eq(sourceDocumentsTable.id, body.data.sourceDocumentId),
+            eq(sourceDocumentsTable.projectId, params.data.projectId),
+          ),
+        );
+      if (!s) {
+        res.status(404).json({ error: "Source document not found in this project" });
+        return;
+      }
       source = s;
     } else {
       const [s] = await db
@@ -369,7 +454,7 @@ router.post(
       source = s;
     }
 
-    if (!source || source.projectId !== params.data.projectId) {
+    if (!source) {
       res
         .status(400)
         .json({ error: "No source document available for this project" });
@@ -390,10 +475,18 @@ router.post(
         : undefined;
       const ollamaBaseUrl = req.header("x-ollama-base-url") ?? undefined;
       const ollamaModel = req.header("x-ollama-model") ?? undefined;
+      const documentChunks = extractDocumentChunks(source.structuredDocument);
       extracted = await runExtraction(
         source.content,
         body.data.provider ?? undefined,
-        { openaiApiKey, geminiApiKey, ollamaBaseUrl, ollamaModel },
+        {
+          openaiApiKey,
+          geminiApiKey,
+          ollamaBaseUrl,
+          ollamaModel,
+          documentChunks,
+          sourceKind: source.kind,
+        },
       );
     } catch (err) {
       if (err instanceof ExtractionInputError) {
@@ -405,7 +498,10 @@ router.post(
           { err, providerName: err.providerName },
           "Extraction provider error",
         );
-        res.status(err.status).json({ error: err.message });
+        res.status(err.status).json({
+          error: err.message,
+          ...(err.details ? { details: err.details } : {}),
+        });
         return;
       }
       req.log.error({ err }, "Unexpected extraction error");
@@ -539,7 +635,7 @@ router.get(
       return;
     }
     if (!canViewProject(project, req.user?.id)) {
-      res.status(403).json({ error: "Access denied" });
+      res.status(403).json(accessDeniedForProject(project, req));
       return;
     }
     const [latest] = await db
@@ -580,7 +676,7 @@ router.get(
       return;
     }
     if (!canViewProject(project, req.user?.id)) {
-      res.status(403).json({ error: "Access denied" });
+      res.status(403).json(accessDeniedForProject(project, req));
       return;
     }
 

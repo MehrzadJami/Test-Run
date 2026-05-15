@@ -108,6 +108,9 @@ export const GetProjectResponse = zod
           kind: zod.enum(["text", "pdf"]),
           filename: zod.string().nullable(),
           content: zod.string(),
+          structuredDocument: zod
+            .record(zod.string(), zod.unknown())
+            .nullable(),
           createdAt: zod.coerce.date(),
         }),
       ),
@@ -116,7 +119,7 @@ export const GetProjectResponse = zod
           id: zod.number(),
           projectId: zod.number(),
           sourceDocumentId: zod.number().nullable(),
-          providerUsed: zod.enum(["mock", "openai", "gemini"]),
+          providerUsed: zod.enum(["mock", "openai", "gemini", "groq", "ollama", "rule_based"]),
           status: zod.enum(["pending", "ready", "failed"]),
           modelCardTitle: zod.string(),
           domain: zod.string(),
@@ -182,6 +185,10 @@ export const ParsePdfResponse = zod.object({
   pageCount: zod.number().describe("Number of pages in the PDF."),
   wordCount: zod.number().describe("Approximate word count of extracted text."),
   charCount: zod.number().describe("Character count of extracted text."),
+  fallback_required: zod.boolean().optional(),
+  message: zod.string().nullable().optional(),
+  diagnostics: zod.record(zod.string(), zod.unknown()).optional(),
+  structuredDocument: zod.record(zod.string(), zod.unknown()).optional(),
 });
 
 /**
@@ -195,6 +202,7 @@ export const AddSourceDocumentBody = zod.object({
   kind: zod.enum(["text", "pdf"]),
   filename: zod.string().nullish(),
   content: zod.string().min(1),
+  structuredDocument: zod.record(zod.string(), zod.unknown()).nullish(),
 });
 
 /**
@@ -215,10 +223,10 @@ export const CreateExtractionBody = zod.object({
       "Optional — if omitted, uses the most recent source document for the project.",
     ),
   provider: zod
-    .enum(["mock", "openai", "gemini", "auto"])
+    .enum(["mock", "openai", "gemini", "groq", "ollama", "rule_based", "auto"])
     .optional()
     .describe(
-      'AI provider to use for extraction. \"auto\" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. \"mock\" always uses deterministic mock output.',
+      'AI provider to use for extraction. \"auto\" (default) uses the fallback chain: OpenAI → Gemini → Groq → Ollama → Rule-based depending on which providers are configured. \"rule_based\" uses deterministic local extraction. \"mock\" always uses fixed demo output.',
     ),
 });
 
@@ -234,7 +242,7 @@ export const GetModelCardByProjectResponse = zod.object({
     id: zod.number(),
     projectId: zod.number(),
     sourceDocumentId: zod.number().nullable(),
-    providerUsed: zod.enum(["mock", "openai", "gemini"]),
+    providerUsed: zod.enum(["mock", "openai", "gemini", "groq", "ollama", "rule_based"]),
     status: zod.enum(["pending", "ready", "failed"]),
     modelCardTitle: zod.string(),
     domain: zod.string(),
@@ -347,6 +355,19 @@ export const GetModelCardByProjectResponse = zod.object({
       variablesInvolved: zod
         .array(zod.string())
         .describe("Symbols appearing in this equation."),
+      equationType: zod
+        .enum([
+          "dynamic_ode",
+          "algebraic_calculation",
+          "stoichiometric_reaction",
+          "empirical_correlation",
+          "reported_experimental_result",
+          "control_law",
+          "unknown",
+        ])
+        .describe(
+          "Scientific equation semantics; only dynamic_ode is runnable ODE content.",
+        ),
       confidence: zod.enum(["high", "medium", "low"]),
       description: zod
         .string()
@@ -377,7 +398,7 @@ export const GetModelCardByProjectResponse = zod.object({
         .string()
         .describe("Explanation of what the variable represents physically."),
       unit: zod.string(),
-      role: zod.enum(["state", "input", "output"]),
+      role: zod.enum(["state", "input", "output", "parameter", "control"]),
       confidence: zod.enum(["high", "medium", "low"]),
       sourceQuote: zod.string(),
       editedByUser: zod.boolean(),
@@ -391,6 +412,8 @@ export const GetModelCardByProjectResponse = zod.object({
       symbol: zod.string(),
       name: zod.string().describe("Full descriptive name of the parameter."),
       value: zod.number(),
+      valueRaw: zod.string(),
+      valueNumeric: zod.number().nullable(),
       unit: zod.string(),
       confidence: zod.enum(["high", "medium", "low"]),
       sourceQuote: zod.string(),
@@ -445,6 +468,7 @@ export const ExportProjectResponse = zod.object({
       kind: zod.enum(["text", "pdf"]),
       filename: zod.string().nullable(),
       content: zod.string(),
+      structuredDocument: zod.record(zod.string(), zod.unknown()).nullable(),
       createdAt: zod.coerce.date(),
     }),
   ),
@@ -454,7 +478,7 @@ export const ExportProjectResponse = zod.object({
         id: zod.number(),
         projectId: zod.number(),
         sourceDocumentId: zod.number().nullable(),
-        providerUsed: zod.enum(["mock", "openai", "gemini"]),
+        providerUsed: zod.enum(["mock", "openai", "gemini", "groq", "ollama", "rule_based"]),
         status: zod.enum(["pending", "ready", "failed"]),
         modelCardTitle: zod.string(),
         domain: zod.string(),
@@ -571,6 +595,19 @@ export const ExportProjectResponse = zod.object({
           variablesInvolved: zod
             .array(zod.string())
             .describe("Symbols appearing in this equation."),
+          equationType: zod
+            .enum([
+              "dynamic_ode",
+              "algebraic_calculation",
+              "stoichiometric_reaction",
+              "empirical_correlation",
+              "reported_experimental_result",
+              "control_law",
+              "unknown",
+            ])
+            .describe(
+              "Scientific equation semantics; only dynamic_ode is runnable ODE content.",
+            ),
           confidence: zod.enum(["high", "medium", "low"]),
           description: zod
             .string()
@@ -603,7 +640,7 @@ export const ExportProjectResponse = zod.object({
               "Explanation of what the variable represents physically.",
             ),
           unit: zod.string(),
-          role: zod.enum(["state", "input", "output"]),
+          role: zod.enum(["state", "input", "output", "parameter", "control"]),
           confidence: zod.enum(["high", "medium", "low"]),
           sourceQuote: zod.string(),
           editedByUser: zod.boolean(),
@@ -619,6 +656,8 @@ export const ExportProjectResponse = zod.object({
             .string()
             .describe("Full descriptive name of the parameter."),
           value: zod.number(),
+          valueRaw: zod.string(),
+          valueNumeric: zod.number().nullable(),
           unit: zod.string(),
           confidence: zod.enum(["high", "medium", "low"]),
           sourceQuote: zod.string(),
@@ -656,7 +695,7 @@ export const GetPublicModelCardResponse = zod.object({
     id: zod.number(),
     projectId: zod.number(),
     sourceDocumentId: zod.number().nullable(),
-    providerUsed: zod.enum(["mock", "openai", "gemini"]),
+    providerUsed: zod.enum(["mock", "openai", "gemini", "groq", "ollama", "rule_based"]),
     status: zod.enum(["pending", "ready", "failed"]),
     modelCardTitle: zod.string(),
     domain: zod.string(),
@@ -769,6 +808,19 @@ export const GetPublicModelCardResponse = zod.object({
       variablesInvolved: zod
         .array(zod.string())
         .describe("Symbols appearing in this equation."),
+      equationType: zod
+        .enum([
+          "dynamic_ode",
+          "algebraic_calculation",
+          "stoichiometric_reaction",
+          "empirical_correlation",
+          "reported_experimental_result",
+          "control_law",
+          "unknown",
+        ])
+        .describe(
+          "Scientific equation semantics; only dynamic_ode is runnable ODE content.",
+        ),
       confidence: zod.enum(["high", "medium", "low"]),
       description: zod
         .string()
@@ -799,7 +851,7 @@ export const GetPublicModelCardResponse = zod.object({
         .string()
         .describe("Explanation of what the variable represents physically."),
       unit: zod.string(),
-      role: zod.enum(["state", "input", "output"]),
+      role: zod.enum(["state", "input", "output", "parameter", "control"]),
       confidence: zod.enum(["high", "medium", "low"]),
       sourceQuote: zod.string(),
       editedByUser: zod.boolean(),
@@ -813,6 +865,8 @@ export const GetPublicModelCardResponse = zod.object({
       symbol: zod.string(),
       name: zod.string().describe("Full descriptive name of the parameter."),
       value: zod.number(),
+      valueRaw: zod.string(),
+      valueNumeric: zod.number().nullable(),
       unit: zod.string(),
       confidence: zod.enum(["high", "medium", "low"]),
       sourceQuote: zod.string(),
@@ -851,7 +905,7 @@ export const PatchVariableBody = zod
     name: zod.string().optional(),
     meaning: zod.string().optional(),
     unit: zod.string().optional(),
-    role: zod.enum(["state", "input", "output"]).optional(),
+    role: zod.enum(["state", "input", "output", "parameter", "control"]).optional(),
     confidence: zod.enum(["high", "medium", "low"]).optional(),
     sourceQuote: zod.string().optional(),
   })
@@ -866,7 +920,7 @@ export const PatchVariableResponse = zod.object({
     .string()
     .describe("Explanation of what the variable represents physically."),
   unit: zod.string(),
-  role: zod.enum(["state", "input", "output"]),
+  role: zod.enum(["state", "input", "output", "parameter", "control"]),
   confidence: zod.enum(["high", "medium", "low"]),
   sourceQuote: zod.string(),
   editedByUser: zod.boolean(),
@@ -892,7 +946,7 @@ export const ResetVariableResponse = zod.object({
     .string()
     .describe("Explanation of what the variable represents physically."),
   unit: zod.string(),
-  role: zod.enum(["state", "input", "output"]),
+  role: zod.enum(["state", "input", "output", "parameter", "control"]),
   confidence: zod.enum(["high", "medium", "low"]),
   sourceQuote: zod.string(),
   editedByUser: zod.boolean(),
@@ -925,6 +979,8 @@ export const PatchParameterResponse = zod.object({
   symbol: zod.string(),
   name: zod.string().describe("Full descriptive name of the parameter."),
   value: zod.number(),
+  valueRaw: zod.string(),
+  valueNumeric: zod.number().nullable(),
   unit: zod.string(),
   confidence: zod.enum(["high", "medium", "low"]),
   sourceQuote: zod.string(),
@@ -945,6 +1001,8 @@ export const ResetParameterResponse = zod.object({
   symbol: zod.string(),
   name: zod.string().describe("Full descriptive name of the parameter."),
   value: zod.number(),
+  valueRaw: zod.string(),
+  valueNumeric: zod.number().nullable(),
   unit: zod.string(),
   confidence: zod.enum(["high", "medium", "low"]),
   sourceQuote: zod.string(),
@@ -985,6 +1043,19 @@ export const PatchEquationResponse = zod.object({
   variablesInvolved: zod
     .array(zod.string())
     .describe("Symbols appearing in this equation."),
+  equationType: zod
+    .enum([
+      "dynamic_ode",
+      "algebraic_calculation",
+      "stoichiometric_reaction",
+      "empirical_correlation",
+      "reported_experimental_result",
+      "control_law",
+      "unknown",
+    ])
+    .describe(
+      "Scientific equation semantics; only dynamic_ode is runnable ODE content.",
+    ),
   confidence: zod.enum(["high", "medium", "low"]),
   description: zod
     .string()
@@ -1022,6 +1093,19 @@ export const ResetEquationResponse = zod.object({
   variablesInvolved: zod
     .array(zod.string())
     .describe("Symbols appearing in this equation."),
+  equationType: zod
+    .enum([
+      "dynamic_ode",
+      "algebraic_calculation",
+      "stoichiometric_reaction",
+      "empirical_correlation",
+      "reported_experimental_result",
+      "control_law",
+      "unknown",
+    ])
+    .describe(
+      "Scientific equation semantics; only dynamic_ode is runnable ODE content.",
+    ),
   confidence: zod.enum(["high", "medium", "low"]),
   description: zod
     .string()

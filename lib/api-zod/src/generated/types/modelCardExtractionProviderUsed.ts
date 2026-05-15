@@ -13,4 +13,7 @@ export const ModelCardExtractionProviderUsed = {
   mock: "mock",
   openai: "openai",
   gemini: "gemini",
+  groq: "groq",
+  ollama: "ollama",
+  rule_based: "rule_based",
 } as const;

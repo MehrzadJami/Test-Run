@@ -22,6 +22,11 @@ export interface ParsePdfResult {
   wordCount: number;
   /** Character count of extracted text. */
   charCount: number;
+  fallback_required?: boolean;
+  /** @nullable */
+  message?: string | null;
+  diagnostics?: { [key: string]: unknown };
+  structuredDocument?: { [key: string]: unknown };
 }
 
 export interface HealthStatus {
@@ -125,6 +130,8 @@ export interface SourceDocument {
   /** @nullable */
   filename: string | null;
   content: string;
+  /** @nullable */
+  structuredDocument: { [key: string]: unknown } | null;
   createdAt: string;
 }
 
@@ -135,6 +142,9 @@ export const ExtractionSummaryProviderUsed = {
   mock: "mock",
   openai: "openai",
   gemini: "gemini",
+  groq: "groq",
+  ollama: "ollama",
+  rule_based: "rule_based",
 } as const;
 
 export type ExtractionSummaryStatus =
@@ -184,10 +194,12 @@ export interface AddSourceDocumentInput {
   filename?: string | null;
   /** @minLength 1 */
   content: string;
+  /** @nullable */
+  structuredDocument?: { [key: string]: unknown } | null;
 }
 
 /**
- * AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. "mock" always uses deterministic mock output.
+ * AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Groq → Ollama → Rule-based depending on which providers are configured. "rule_based" uses deterministic local extraction. "mock" always uses fixed demo output.
  */
 export type CreateExtractionInputProvider =
   (typeof CreateExtractionInputProvider)[keyof typeof CreateExtractionInputProvider];
@@ -196,6 +208,9 @@ export const CreateExtractionInputProvider = {
   mock: "mock",
   openai: "openai",
   gemini: "gemini",
+  groq: "groq",
+  ollama: "ollama",
+  rule_based: "rule_based",
   auto: "auto",
 } as const;
 
@@ -205,7 +220,7 @@ export interface CreateExtractionInput {
    * @nullable
    */
   sourceDocumentId?: number | null;
-  /** AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Mock depending on which keys are configured. "mock" always uses deterministic mock output. */
+  /** AI provider to use for extraction. "auto" (default) uses the fallback chain: OpenAI → Gemini → Groq → Ollama → Rule-based depending on which providers are configured. "rule_based" uses deterministic local extraction. "mock" always uses fixed demo output. */
   provider?: CreateExtractionInputProvider;
 }
 
@@ -224,6 +239,18 @@ export const EquationConfidence = {
  */
 export type EquationOriginalValue = { [key: string]: unknown } | null;
 
+export type EquationType = (typeof EquationType)[keyof typeof EquationType];
+
+export const EquationType = {
+  dynamic_ode: "dynamic_ode",
+  algebraic_calculation: "algebraic_calculation",
+  stoichiometric_reaction: "stoichiometric_reaction",
+  empirical_correlation: "empirical_correlation",
+  reported_experimental_result: "reported_experimental_result",
+  control_law: "control_law",
+  unknown: "unknown",
+} as const;
+
 export interface Equation {
   id: number;
   ordinal: number;
@@ -237,6 +264,8 @@ export interface Equation {
   meaning: string;
   /** Symbols appearing in this equation. */
   variablesInvolved: string[];
+  /** Scientific equation semantics; only dynamic_ode is runnable ODE content. */
+  equationType: EquationType;
   confidence: EquationConfidence;
   /** Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility. */
   description: string;
@@ -256,6 +285,8 @@ export const VariableRole = {
   state: "state",
   input: "input",
   output: "output",
+  parameter: "parameter",
+  control: "control",
 } as const;
 
 export type VariableConfidence =
@@ -309,6 +340,11 @@ export interface Parameter {
   /** Full descriptive name of the parameter. */
   name: string;
   value: number;
+  valueRaw: string;
+  /**
+   * @nullable
+   */
+  valueNumeric: number | null;
   unit: string;
   confidence: ParameterConfidence;
   sourceQuote: string;
@@ -358,6 +394,8 @@ export const PatchVariableInputRole = {
   state: "state",
   input: "input",
   output: "output",
+  parameter: "parameter",
+  control: "control",
 } as const;
 
 export type PatchVariableInputConfidence =
@@ -463,6 +501,9 @@ export const ModelCardExtractionProviderUsed = {
   mock: "mock",
   openai: "openai",
   gemini: "gemini",
+  groq: "groq",
+  ollama: "ollama",
+  rule_based: "rule_based",
 } as const;
 
 export type ModelCardExtractionStatus =

@@ -20,6 +20,7 @@ export * from "./createProjectInput";
 export * from "./equation";
 export * from "./equationConfidence";
 export * from "./equationOriginalValue";
+export * from "./equationType";
 export * from "./exchangeMobileAuthorizationCodeBody";
 export * from "./exchangeMobileAuthorizationCodeResponse";
 export * from "./extractionSummary";

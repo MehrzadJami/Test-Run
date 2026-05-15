@@ -157,6 +157,65 @@ describe("runUnitCheck — undefined symbols in equations", () => {
   });
 });
 
+
+  it("ignores derivative notation and placeholder states in exact Monod equations", () => {
+    const equations = [
+      makeEquation({ id: 1, latex: "mu = mumax*S/(Ks + S)", description: "Monod growth" }),
+      makeEquation({ id: 2, latex: "dX/dt = (mu - D)*X", description: "Biomass balance" }),
+      makeEquation({ id: 3, latex: "dS/dt = D*(Sin - S) - (1/Yxs)*mu*X", description: "Substrate balance" }),
+    ];
+    const variables = [
+      makeVariable({ id: 0, symbol: "unknown", name: "unknown", unit: "", role: "state" }),
+      makeVariable({ id: 1, symbol: "X", unit: "g/L", role: "state" }),
+      makeVariable({ id: 2, symbol: "S", unit: "g/L", role: "state" }),
+      makeVariable({ id: 3, symbol: "mu", unit: "1/h", role: "output" }),
+    ];
+    const parameters = [
+      makeParameter({ id: 1, symbol: "mumax", unit: "1/h" }),
+      makeParameter({ id: 2, symbol: "Ks", unit: "g/L" }),
+      makeParameter({ id: 3, symbol: "D", unit: "1/h" }),
+      makeParameter({ id: 4, symbol: "Sin", unit: "g/L" }),
+      makeParameter({ id: 5, symbol: "Yxs", unit: "gX/gS" }),
+    ];
+    const report = runUnitCheck(equations, variables, parameters, {
+      equations: [
+        { label: "(1)", equation_latex: "mu = mumax*S/(Ks + S)", variables_involved: ["mu", "mumax", "S", "Ks"] },
+        { label: "(2)", equation_latex: "dX/dt = (mu - D)*X", variables_involved: ["X", "mu", "D"] },
+        { label: "(3)", equation_latex: "dS/dt = D*(Sin - S) - (1/Yxs)*mu*X", variables_involved: ["S", "D", "Sin", "Yxs", "mu", "X"] },
+      ],
+    });
+    const symbols = report.warnings.map((warning) => warning.equation_or_symbol);
+    const messages = report.warnings.map((warning) => warning.message).join("\n");
+
+    expect(symbols).not.toContain("unknown");
+    expect(symbols).not.toContain("dX");
+    expect(symbols).not.toContain("dS");
+    expect(messages).not.toMatch(/Ks.*first-order rate/i);
+  });
+
+  it("does not treat initial-condition rows as unused ODE parameters", () => {
+    const equations = [
+      makeEquation({ latex: "dX/dt = (mu - D)*X", description: "Biomass balance" }),
+    ];
+    const variables = [
+      makeVariable({ symbol: "X", unit: "g/L", role: "state" }),
+    ];
+    const parameters = [
+      makeParameter({ symbol: "D", unit: "1/h" }),
+      makeParameter({
+        symbol: "X0",
+        name: "Initial condition for X",
+        value: 0.1,
+        unit: "g/L",
+        sourceQuote: "Initial conditions are X0 = 0.1 g/L.",
+      }),
+    ];
+    const report = runUnitCheck(equations, variables, parameters, null);
+    const messages = report.warnings.map((warning) => warning.message).join("\n");
+
+    expect(messages).not.toMatch(/Parameter "X0" does not appear/);
+  });
+
 // ─── Determinism ──────────────────────────────────────────────────────────────
 
 describe("runUnitCheck — determinism", () => {

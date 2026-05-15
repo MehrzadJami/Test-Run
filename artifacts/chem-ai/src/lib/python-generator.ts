@@ -16,6 +16,9 @@ import type { AnalysisEquation, AnalysisVariable, AnalysisParameter, AnalysisAss
 import type { UnitCheckReport } from "./unit-checker";
 import { normalizeEqText } from "./dimensional-analysis";
 import type { TemplateScanResult } from "./template-matcher";
+import { getParameterNumericValue } from "./parameter-values";
+import { isDynamicEquation } from "./equation-types";
+import type { ChemEBrainReport } from "@workspace/cheme-brain";
 
 // ─── Public input / output types ──────────────────────────────────────────────
 
@@ -34,6 +37,8 @@ export interface PythonGeneratorInput {
   unitReport: UnitCheckReport;
   /** M22 template scan result — when provided, replaces TODO stubs with runnable code */
   templateResult?: TemplateScanResult;
+  /** Advisory ChemE Brain report. Used only for honest scaffold warnings. */
+  chemEBrainReport?: ChemEBrainReport | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -42,11 +47,76 @@ function safeStr(v: unknown): string {
   return v == null ? "" : String(v).trim();
 }
 
+function isPlaceholderSymbol(symbol: string | null | undefined): boolean {
+  const text = safeStr(symbol).toLowerCase();
+  return text === "" || text === "-" || text === "unknown" || text === "n/a";
+}
+
+/**
+ * Returns a short convention note for yield-coefficient symbols so that users
+ * cannot silently provide the value in the wrong direction (e.g., g-substrate
+ * per g-biomass instead of g-biomass per g-substrate, a 100× error).
+ * Returns null for unrecognised symbols.
+ */
+function yieldConventionNote(symbol: string): string | null {
+  const s = symbol.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+  if (/^y[xsb]s/.test(s) || s === "yxs" || s === "ybs") {
+    return "CONVENTION: g-biomass per g-substrate (NOT the reciprocal)";
+  }
+  if (/^yps/.test(s) || s === "yps") {
+    return "CONVENTION: g-product per g-substrate (NOT the reciprocal)";
+  }
+  if (/^y[ox]x/.test(s) || s === "yox" || s === "ycox") {
+    return "CONVENTION: g-O₂ (or CO₂) consumed per g-biomass";
+  }
+  return null;
+}
+
 /** Parse a value to a Python-safe number literal, or return null. */
 function toNumber(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return isNaN(n) ? null : n;
+}
+
+function initialStateSymbol(symbol: string): string | null {
+  const match = symbol.trim().match(/^([A-Za-z][A-Za-z0-9_]*?)(?:_0|(?<![0-9])0)$/);
+  return match?.[1] ?? null;
+}
+
+function initialConditionValueForState(
+  stateSymbol: string,
+  raw: RawExtraction | null,
+  parameters: AnalysisParameter[],
+): number | string | null {
+  const target = stateSymbol.toLowerCase();
+  const rawState = raw?.state_variables?.find(
+    (entry) => safeStr(entry.symbol).toLowerCase() === target,
+  );
+  if (rawState?.initial_condition) {
+    return rawState.initial_condition.value_numeric ?? rawState.initial_condition.value ?? null;
+  }
+
+  const rawInitial = raw?.initial_conditions?.find((entry) => {
+    const state = safeStr(entry.state_symbol).toLowerCase();
+    const inferred = initialStateSymbol(safeStr(entry.symbol))?.toLowerCase();
+    return state === target || inferred === target;
+  });
+  if (rawInitial) return rawInitial.value_numeric ?? rawInitial.value ?? null;
+
+  const parameter = parameters.find((entry) => {
+    const symbol = safeStr(entry.symbol);
+    const inferred = initialStateSymbol(symbol)?.toLowerCase();
+    const original = entry.originalValue as { kind?: string; status?: string } | null | undefined;
+    return (
+      inferred === target ||
+      safeStr(entry.name).toLowerCase().includes(`initial condition for ${target}`) ||
+      original?.kind === "initial_condition" ||
+      original?.status === "initial_condition"
+    );
+  });
+  if (!parameter) return null;
+  return getParameterNumericValue(parameter) ?? parameter.valueNumeric ?? parameter.valueRaw ?? parameter.value ?? null;
 }
 
 /** Return a Python repr of a number, or a TODO placeholder string. */
@@ -108,10 +178,13 @@ export function generatePythonOdeTemplate(input: PythonGeneratorInput): string {
     report,
     unitReport,
     templateResult,
+    chemEBrainReport,
   } = input;
 
-  const stateVars   = variables.filter((v) => v.role === "state");
-  const otherVars   = variables.filter((v) => v.role !== "state");
+  const cleanVariables = variables.filter((v) => !isPlaceholderSymbol(v.symbol));
+  const cleanParameters = parameters.filter((p) => !isPlaceholderSymbol(p.symbol));
+  const stateVars   = cleanVariables.filter((v) => v.role === "state");
+  const otherVars   = cleanVariables.filter((v) => v.role !== "state");
   const dateStr     = new Date().toISOString().slice(0, 10);
   const readiness   = report.simulation_readiness;
   const readyLabel  = readiness === "ready" ? "Simulation Ready" : readiness === "partial" ? "Partial — review TODOs" : "Not Ready — see warnings";
@@ -168,6 +241,17 @@ ${DIVIDER}
 # ⚠  ${highCount} HIGH-SEVERITY UNIT ISSUE(S) DETECTED — check Unit Check tab.
 #`);
   }
+  if (chemEBrainReport && chemEBrainReport.simulation_support.status !== "runnable") {
+    parts.push(`#
+# ⚠  CHEME BRAIN ADVISORY — ${chemEBrainReport.simulation_support.status.toUpperCase()}
+#   ${chemEBrainReport.simulation_support.reason}`);
+    for (const blocker of chemEBrainReport.missing_requirements.slice(0, 6)) {
+      parts.push(wrapComment(`${blocker.item}: ${blocker.whyNeeded}`, "#     • "));
+    }
+    parts.push(`#
+# This file remains a scaffold until the missing ChemE Brain requirements are resolved.
+#`);
+  }
   parts.push(DIVIDER);
 
   // ── Imports ───────────────────────────────────────────────────────────────
@@ -186,19 +270,21 @@ import matplotlib.pyplot as plt
   parts.push(`params = {`);
 
   // Build a width-aligned table inside the dict
-  const maxSymLen = Math.max(4, ...parameters.map((p) => p.symbol.length)) + 2;
+  const maxSymLen = Math.max(4, ...cleanParameters.map((p) => p.symbol.length)) + 2;
 
-  const hasMissing = parameters.some((p) => toNumber(p.value) === null);
+  const hasMissing = cleanParameters.some((p) => getParameterNumericValue(p) === null);
   if (hasMissing) {
     parts.push(`    # ── Extracted values (from source) ──────────────────────────────`);
   }
 
-  for (const p of parameters) {
+  for (const p of cleanParameters) {
     const sym  = `"${p.symbol}"`;
-    const val  = pyValue(p.value, "None  # TODO: specify numeric value");
+    const val  = pyValue(getParameterNumericValue(p), "None  # TODO: specify numeric value");
     const unit = p.unit ? `[${p.unit}]` : "[unit unknown — TODO]";
     const conf = p.confidence ? ` confidence: ${p.confidence}` : "";
-    parts.push(`    ${pad(sym + ":", maxSymLen + 3)} ${pad(val + ",", 12)} # ${unit}${conf}`);
+    const yieldNote = yieldConventionNote(p.symbol);
+    const annotation = yieldNote ? ` ⚠ ${yieldNote}` : "";
+    parts.push(`    ${pad(sym + ":", maxSymLen + 3)} ${pad(val + ",", 12)} # ${unit}${conf}${annotation}`);
   }
 
   if (hasMissing) {
@@ -226,11 +312,8 @@ import matplotlib.pyplot as plt
   for (let i = 0; i < stateVars.length; i++) {
     const v    = stateVars[i];
     const unit = v.unit ? `[${v.unit}]` : "[unit unknown]";
-    // Look for an initial condition value in raw state_variables
-    const rawSv = raw?.state_variables?.find(
-      (r) => safeStr(r.symbol).toLowerCase() === v.symbol.toLowerCase()
-    );
-    const ic = rawSv ? pyValue((rawSv as Record<string, unknown>)["initial_condition"], "None") : "None";
+    const icValue = initialConditionValueForState(v.symbol, raw, cleanParameters);
+    const ic = pyValue(icValue, "None");
     const icStr = ic !== "None" ? ic : "0.0  # TODO: set from experiment";
     const comma = i < stateVars.length - 1 ? "," : "";
     parts.push(`    ${icStr}${comma}  # ${v.symbol} ${unit}`);
@@ -312,51 +395,36 @@ import matplotlib.pyplot as plt
   }
 
   // Unpack parameters
-  if (parameters.length > 0) {
+  if (cleanParameters.length > 0) {
     parts.push(`\n    # ── Unpack parameters ──────────────────────────────────────────────`);
-    for (const p of parameters) {
+    for (const p of cleanParameters) {
       const unit = p.unit ? `# [${p.unit}]` : "# [unit unknown]";
       parts.push(`    ${pad(p.symbol, maxSymLen)} = params["${p.symbol}"]  ${unit}`);
     }
   }
 
   // Equation stubs
-  const eqsToShow = rawEqs.length > 0 ? rawEqs : equations.map((e) => ({
+  const normalizedEquationRefs = equations.map((e) => ({
     label: e.description,
     equation_latex: e.latex,
     equation_plaintext: "",
+    equation_type: e.equationType ?? "unknown",
     variables_involved: [] as string[],
   }));
+  const allEqsToShow = rawEqs.length > 0 ? rawEqs : normalizedEquationRefs;
+  const eqsToShow = allEqsToShow.filter(isDynamicEquation);
 
-  if (eqsToShow.length > 0) {
+  if (eqsToShow.length > 0 || (templateResult?.matched.length ?? 0) > 0) {
     parts.push(`\n    # ── Intermediate calculations ──────────────────────────────────────`);
-    for (let i = 0; i < eqsToShow.length; i++) {
-      const eq = eqsToShow[i];
-      const latex = safeStr(eq.equation_latex);
-      const plain = safeStr(eq.equation_plaintext);
-      const isDerivative = /d[A-Za-z]+\s*\/\s*dt/.test(latex) || /d[A-Za-z]+\s*\/\s*dt/.test(plain);
-      if (!isDerivative) {
-        const label = safeStr(eq.label) || `Eq ${i + 1}`;
-        // Check if this equation was matched by a template
-        const eqNorm = normalizeEqText(latex || plain);
-        const tmplMatch = templateResult?.matched.find(
-          (m) => normalizeEqText(m.originalEquation) === eqNorm,
-        );
-        parts.push(`    # ${THIN.replace("# ", "")} `);
-        parts.push(`    # Eq ${i + 1} — ${label}`);
-        if (tmplMatch && tmplMatch.isRunnable) {
-          parts.push(`    # Template: ${tmplMatch.templateLabel}`);
-          parts.push(`    ${tmplMatch.pythonCode}`);
-        } else if (tmplMatch && !tmplMatch.isRunnable) {
-          parts.push(`    # Template: ${tmplMatch.templateLabel}  (missing: ${tmplMatch.missingSymbols.join(", ")})`);
-          if (latex) parts.push(`    # TODO: implement: ${latex}`);
-          const lhs = extractLhsSymbol(latex || plain);
-          parts.push(`    ${lhs ?? "result"} = 0.0  # TODO: add missing symbols first`);
-        } else {
-          if (latex) parts.push(`    # TODO: implement: ${latex}`);
-          const lhs = extractLhsSymbol(latex || plain);
-          parts.push(`    ${lhs ?? "result"} = 0.0  # TODO: translate from equation above`);
-        }
+    for (const tmplMatch of templateResult?.matched ?? []) {
+      parts.push(`    # ${THIN.replace("# ", "")} `);
+      parts.push(`    # Template: ${tmplMatch.templateLabel}`);
+      if (tmplMatch.isRunnable) {
+        parts.push(`    ${tmplMatch.pythonCode}`);
+      } else {
+        parts.push(`    # Missing symbols: ${tmplMatch.missingSymbols.join(", ")}`);
+        const lhs = extractLhsSymbol(tmplMatch.originalEquation);
+        parts.push(`    ${lhs ?? "result"} = 0.0  # TODO: add missing symbols first`);
       }
     }
 
@@ -415,7 +483,7 @@ import matplotlib.pyplot as plt
 
   // ── Simulation ────────────────────────────────────────────────────────────
   parts.push(section("SIMULATION"));
-  const timeUnit = inferTimeUnit(parameters, variables);
+  const timeUnit = inferTimeUnit(cleanParameters, cleanVariables);
   parts.push(`
 # Adjust t_span to match your experimental duration.
 t_span = (0, 100)   # (start, end) in ${timeUnit}
@@ -436,7 +504,7 @@ sol = solve_ivp(
 if not sol.success:
     raise RuntimeError(f"ODE solver failed: {sol.message}")
 
-print(f"Simulation complete. t = {sol.t[0]:.2f} → {sol.t[-1]:.2f} {timeUnit} ({len(sol.t)} points)")
+print(f"Simulation complete. t = {sol.t[0]:.2f} → {sol.t[-1]:.2f} ${timeUnit} ({len(sol.t)} points)")
 `);
 
   // ── Plotting ──────────────────────────────────────────────────────────────
@@ -450,7 +518,7 @@ axes = [axes] if ${nVars} == 1 else list(axes)
 `);
   for (let i = 0; i < stateVars.length; i++) {
     const v     = stateVars[i];
-    const unit  = v.unit ? ` [{v.unit}]` : "";
+    const unit  = v.unit ? ` [${v.unit}]` : "";
     const color = colors[i % colors.length];
     parts.push(`axes[${i}].plot(sol.t, sol.y[${i}], color=${color}, linewidth=2, label="${v.symbol}")`);
     parts.push(`axes[${i}].set_ylabel("${v.symbol}${unit}")`);

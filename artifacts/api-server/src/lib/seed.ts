@@ -127,6 +127,7 @@ const CHEMOSTAT_RAW_EXTRACTION: ExtractionResult = {
       source_context:
         "Maximum specific growth rate reported as 1.10 1/day at 25 C.",
       confidence: "high",
+      status: "explicit",
     },
     {
       symbol: "K_S",
@@ -135,6 +136,7 @@ const CHEMOSTAT_RAW_EXTRACTION: ExtractionResult = {
       unit: "mg/L",
       source_context: "Half-saturation constant K_S = 12 mg/L.",
       confidence: "medium",
+      status: "explicit",
     },
     {
       symbol: "Y",
@@ -144,6 +146,7 @@ const CHEMOSTAT_RAW_EXTRACTION: ExtractionResult = {
       source_context:
         "Yield coefficient Y = 0.45 g biomass per g substrate consumed.",
       confidence: "high",
+      status: "explicit",
     },
     {
       symbol: "S_in",
@@ -152,6 +155,7 @@ const CHEMOSTAT_RAW_EXTRACTION: ExtractionResult = {
       unit: "mg/L",
       source_context: "Feed substrate concentration S_in = 150 mg/L.",
       confidence: "high",
+      status: "explicit",
     },
     {
       symbol: "D",
@@ -161,6 +165,7 @@ const CHEMOSTAT_RAW_EXTRACTION: ExtractionResult = {
       source_context:
         "Dilution rate D = q/V set to 0.6 1/day in the reported experiment.",
       confidence: "high",
+      status: "explicit",
     },
   ],
   equations: [

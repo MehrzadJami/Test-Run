@@ -44,6 +44,18 @@ function hasStr(v: unknown): boolean {
   return safeStr(v) !== "";
 }
 
+function isInitialConditionParameter(parameter: AnalysisParameter): boolean {
+  const symbol = safeStr(parameter.symbol);
+  const name = safeStr(parameter.name);
+  const source = safeStr(parameter.sourceQuote);
+  const originalKind = safeStr(parameter.originalValue?.kind ?? parameter.originalValue?.status);
+  return (
+    /^(?:[A-Za-z][A-Za-z0-9_]*0|[A-Za-z][A-Za-z0-9_]*_0)$/.test(symbol) ||
+    /initial\s+condition/i.test(`${name} ${source} ${originalKind}`) ||
+    originalKind === "initial_condition"
+  );
+}
+
 /** Normalise a time-unit token to a canonical label, or null if not a time unit. */
 function normalizeTimeToken(token: string): string | null {
   const t = token.toLowerCase().trim();
@@ -124,6 +136,7 @@ function extractLatexSymbols(latex: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const s of raw) {
+    if (/^d[A-Z][A-Za-z0-9_]*$/.test(s)) continue;
     if (!LATEX_CMDS.has(s) && !seen.has(s)) {
       seen.add(s);
       out.push(s);
@@ -143,7 +156,6 @@ const RATE_SYMBOL_PATTERNS = [
   /^k_?[lL][aA]$/, // volumetric mass transfer
   /^q_?[oO]2$/,
   /^[kK]_?[hH]$/,
-  /^[kK]_?[sS]$/i, // sometimes rate-like in simplified models
 ];
 
 /** Symbols that almost always represent concentrations. */
@@ -162,6 +174,11 @@ const RATIO_SYMBOL_PATTERNS = [
 
 function matchesAny(sym: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(sym));
+}
+
+function isPlaceholderSymbol(symbol: string | null | undefined): boolean {
+  const text = safeStr(symbol).toLowerCase();
+  return text === "" || text === "-" || text === "unknown" || text === "n/a";
 }
 
 // ─── GAS-TRANSFER KEYWORD DETECTOR ───────────────────────────────────────────
@@ -189,15 +206,17 @@ export function runUnitCheck(
   // Build lookup maps from normalized tables (both tables contribute symbols)
   const allSymbolMap = new Map<string, { unit: string | null | undefined; role?: string }>();
   for (const v of variables) {
+    if (isPlaceholderSymbol(v.symbol)) continue;
     allSymbolMap.set(v.symbol, { unit: v.unit, role: v.role });
   }
   for (const p of parameters) {
+    if (isPlaceholderSymbol(p.symbol)) continue;
     if (!allSymbolMap.has(p.symbol)) {
       allSymbolMap.set(p.symbol, { unit: p.unit, role: "parameter" });
     }
   }
 
-  const stateVariables = variables.filter((v) => v.role === "state");
+  const stateVariables = variables.filter((v) => v.role === "state" && !isPlaceholderSymbol(v.symbol));
 
   // Concatenate all equation text for full-text checks
   const allEquationText = equations.map((e) => e.latex + " " + e.description).join(" ");
@@ -216,6 +235,7 @@ export function runUnitCheck(
 
   // ── Check 4: Every parameter should have a unit ────────────────────────────
   for (const p of parameters) {
+    if (isPlaceholderSymbol(p.symbol)) continue;
     if (!hasStr(p.unit)) {
       warnings.push({
         severity: "medium",
@@ -365,7 +385,7 @@ export function runUnitCheck(
     const timeUnitsFound = new Map<string, string>(); // canonical → raw token
     const allUnits = [
       ...variables.map((v) => safeStr(v.unit)),
-      ...parameters.map((p) => safeStr(p.unit)),
+      ...parameters.filter((p) => !isPlaceholderSymbol(p.symbol)).map((p) => safeStr(p.unit)),
     ];
     for (const u of allUnits) {
       // Look for explicit time-denominator tokens
@@ -396,7 +416,7 @@ export function runUnitCheck(
     const allTexts = [
       ...equations.map((e) => e.latex + " " + e.description),
       ...variables.map((v) => v.name),
-      ...parameters.map((p) => p.symbol),
+      ...parameters.filter((p) => !isPlaceholderSymbol(p.symbol)).map((p) => p.symbol),
     ];
     if (mentionsGasTransfer(allTexts)) {
       const hasKla = [...allSymbolMap.keys()].some((s) =>
@@ -421,6 +441,8 @@ export function runUnitCheck(
     ].join(" ");
 
     for (const p of parameters) {
+      if (isPlaceholderSymbol(p.symbol)) continue;
+      if (isInitialConditionParameter(p)) continue;
       // Use word-boundary match to avoid false positives (e.g. "D" inside "CDW")
       const pattern = new RegExp(`\\b${escapeRegex(p.symbol)}\\b`);
       if (!pattern.test(allEqText)) {
@@ -429,6 +451,94 @@ export function runUnitCheck(
           message: `Parameter "${p.symbol}" does not appear in any extracted equation.`,
           equation_or_symbol: p.symbol,
           suggestion: `Verify that "${p.symbol}" is used in the model. If it is implicit (e.g. a physical constant), note its role in the description.`,
+        });
+      }
+    }
+  }
+
+  // ── Check 11: Physical plausibility of kinetic parameters ────────────────
+  {
+    // Helper: find a parameter numeric value by common symbol variants
+    const findNumericParam = (...symbols: string[]): number | null => {
+      for (const sym of symbols) {
+        const p = parameters.find((p) => p.symbol === sym || p.symbol.toLowerCase() === sym.toLowerCase());
+        if (p) {
+          const v = typeof p.value === "number" ? p.value : parseFloat(String(p.value ?? ""));
+          if (Number.isFinite(v)) return v;
+        }
+      }
+      return null;
+    };
+
+    const mumax = findNumericParam("mumax", "mu_max", "μmax");
+    const Ks = findNumericParam("Ks", "K_s", "ks");
+    const D = findNumericParam("D", "D_in");
+    const Sin = findNumericParam("Sin", "S_in", "s_in");
+    const Yxs = findNumericParam("Yxs", "Y_xs", "yxs");
+
+    // C1.9 — μmax realism check (bacteria: 0.001–2.0 h⁻¹ is the realistic window)
+    if (mumax !== null) {
+      if (mumax <= 0) {
+        warnings.push({
+          severity: "high",
+          message: `μmax = ${mumax} is not physically meaningful (must be > 0).`,
+          equation_or_symbol: "mumax",
+          suggestion: "Check for unit-conversion errors. Typical bacterial μmax: 0.1–1.0 h⁻¹.",
+        });
+      } else if (mumax > 2.0) {
+        warnings.push({
+          severity: "medium",
+          message: `μmax = ${mumax} h⁻¹ is unusually high for a bioreactor model. Typical range: 0.01–1.5 h⁻¹.`,
+          equation_or_symbol: "mumax",
+          suggestion: "Verify units are h⁻¹ and not min⁻¹. If value is in 1/min, convert by dividing by 60.",
+        });
+      } else if (mumax < 0.001) {
+        warnings.push({
+          severity: "medium",
+          message: `μmax = ${mumax} h⁻¹ is very low. Confirm units are h⁻¹ (not d⁻¹ or s⁻¹).`,
+          equation_or_symbol: "mumax",
+          suggestion: "If units are d⁻¹, divide by 24 to convert to h⁻¹. Minimum realistic bacterial μmax: ~0.01 h⁻¹.",
+        });
+      }
+    }
+
+    // C1.8 — Yxs physical impossibility (> 0.70 g/g for glucose violates stoichiometry)
+    if (Yxs !== null) {
+      if (Yxs <= 0) {
+        warnings.push({
+          severity: "high",
+          message: `Yxs = ${Yxs} is not physically meaningful (yield must be > 0).`,
+          equation_or_symbol: "Yxs",
+          suggestion: "Yxs is the biomass yield (g biomass per g substrate). Check for sign errors.",
+        });
+      } else if (Yxs > 0.70) {
+        warnings.push({
+          severity: "high",
+          message: `Yxs = ${Yxs} g/g exceeds the theoretical maximum yield (~0.70 g/g for glucose). This is physically impossible and likely a unit or extraction error.`,
+          equation_or_symbol: "Yxs",
+          suggestion: "Check whether Yxs is in g/g (mass basis) or mol/mol. Maximum aerobic yield on glucose: ~0.65 g CDW / g glucose.",
+        });
+      }
+    }
+
+    // C1.5 — Washout condition: D ≥ μ_eff(Sin) means biomass washes out.
+    // Requires Ks AND Sin to compute the actual effective growth rate;
+    // without them we cannot determine μ_eff and the check is skipped.
+    if (mumax !== null && D !== null && Ks !== null && Sin !== null && Ks > 0) {
+      const muEff = (mumax * Sin) / (Ks + Sin);
+      if (D >= muEff) {
+        warnings.push({
+          severity: "high",
+          message: `Washout condition detected: D = ${D.toFixed(4)} h⁻¹ ≥ μ_eff at S_in = ${Sin} g/L (μ_eff = ${muEff.toFixed(4)} h⁻¹). No stable biomass steady state is achievable at this dilution rate.`,
+          equation_or_symbol: "D / mumax",
+          suggestion: "Reduce D below μ_eff(S_in), increase S_in, or verify that washout is intentional (e.g., biomass removal step).",
+        });
+      } else if (D > 0 && D > 0.85 * muEff) {
+        warnings.push({
+          severity: "medium",
+          message: `D = ${D.toFixed(4)} h⁻¹ is within 15% of the washout threshold (μ_eff = ${muEff.toFixed(4)} h⁻¹). The chemostat is operating near its stability limit.`,
+          equation_or_symbol: "D / mumax",
+          suggestion: "Operation near washout is unstable. Small perturbations can trigger washout. Consider reducing D.",
         });
       }
     }

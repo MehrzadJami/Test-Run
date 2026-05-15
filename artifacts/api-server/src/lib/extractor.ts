@@ -1,8 +1,8 @@
 // Extraction engine.
 //
 // Provider abstraction:
-//   Providers include real AI providers (OpenAI, Gemini, Ollama), a local
-//   RuleBasedProvider, and MockProvider (deterministic demo fallback). The
+//   Providers include real AI providers (OpenAI, Gemini, Groq, Ollama), a local
+//   RuleBasedProvider, and MockProvider (explicit deterministic demo). The
 //   active provider is selected by getActiveProvider() based on the caller's
 //   preference and which provider configuration is present. Keys are NEVER
 //   hardcoded.
@@ -11,7 +11,8 @@
 //   1. If the caller requests a specific named provider AND its key exists → use it.
 //   2. If the caller requests "mock" → always use MockProvider (no key needed).
 //   3. Otherwise (auto or requested provider not available) →
-//      OpenAI → Gemini → Ollama → RuleBasedProvider → Mock.
+//      OpenAI → Gemini → Groq → Ollama → RuleBasedProvider.
+//      MockProvider is explicit demo mode only.
 //
 // Validation contract:
 //   runExtraction() is the single public entry point. It validates input,
@@ -40,15 +41,35 @@
 import {
   ExtractionResultSchema,
   type ExtractionResult,
+  type ExtractedEquation,
+  type ExtractedEquationType,
   type ExtractedModelCardMeta,
+  type ExtractedParameter,
+  type ExtractedRole,
+  type ExtractedStateVariable,
 } from "./extraction-schema";
 import { OpenAIProvider } from "./providers/openai-provider";
 import { GeminiProvider } from "./providers/gemini-provider";
+import { GroqProvider } from "./providers/groq-provider";
 import { OllamaPaperUnderstandingProvider } from "./providers/ollama-paper-understanding-provider";
 import { RuleBasedProvider } from "./providers/rule-based-provider";
+import {
+  GroqBudgetError,
+  GroqRateLimitError,
+} from "./providers/groq-budget";
+import { PaperUnderstandingValidationError } from "./providers/paper-understanding-response";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./providers/prompt";
 import { logger } from "./logger";
 import { normalizeModelType } from "@workspace/domain-classifier";
+import {
+  analyzeChunkTruncation,
+  DEFAULT_MAX_TOTAL_CHARS,
+  type ChunkTruncationReport,
+  type PaperUnderstandingDocumentChunk,
+} from "./paper-understanding-prompt";
+import { findUnitWarnings } from "./unit-validation";
+import { formatDocumentChunksAsSourceText } from "./structured-document";
+import { finalizeExtractionResult } from "./extraction-finalizer";
 
 // ---------- Public errors ----------
 
@@ -63,19 +84,30 @@ export class ExtractionInputError extends Error {
 
 /** Provider failed or returned malformed output. 502 territory. */
 export class ExtractionProviderError extends Error {
-  readonly status = 502 as const;
+  readonly status: number;
+  readonly details?: Record<string, unknown>;
   constructor(
     message: string,
     readonly providerName: string,
+    status = 502,
+    details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ExtractionProviderError";
+    this.status = status;
+    this.details = details;
   }
 }
 
 // ---------- Provider interface ----------
 
-export type ProviderName = "mock" | "openai" | "gemini" | "ollama" | "rule_based";
+export type ProviderName =
+  | "mock"
+  | "openai"
+  | "gemini"
+  | "groq"
+  | "ollama"
+  | "rule_based";
 export type ProviderPreference = ProviderName | "auto";
 
 export interface ExtractionProvider {
@@ -89,7 +121,20 @@ export interface ExtractionProvider {
    * Local providers return an ExtractionResult directly (no token metadata).
    */
   extract(sourceText: string): Promise<unknown>;
+  extractFromChunks?(
+    documentChunks: PaperUnderstandingDocumentChunk[],
+  ): Promise<unknown>;
 }
+
+export type ExtractionRuntimeOptions = {
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  groqApiKey?: string;
+  ollamaBaseUrl?: string;
+  ollamaModel?: string;
+  documentChunks?: PaperUnderstandingDocumentChunk[];
+  sourceKind?: "text" | "pdf";
+};
 
 // ---------- Audit data type ----------
 
@@ -122,6 +167,10 @@ export type AuditData = {
 
 const PROMPT_TEMPLATE_SUMMARY =
   "Classifies model_type, then extracts a quantitative chemical engineering model (state variables, ODEs, parameters, assumptions, model card) from scientific/engineering text into a structured JSON object matching ExtractionResultSchema.";
+const STRUCTURED_DOCUMENT_PROMPT_TEMPLATE_SUMMARY =
+  "Uses structured PDF/document chunks with page and section context through PaperUnderstanding, then maps the validated PaperUnderstanding result to ExtractionResultSchema.";
+const FLAT_STRUCTURED_DOCUMENT_FALLBACK_SUMMARY =
+  "Structured PDF/document chunks were available, but the selected fallback used deterministic flat/local extraction over chunk text. It does not perform full-paper semantic understanding; page/section context may be limited.";
 
 // ---------- Mock provider ----------
 
@@ -259,14 +308,32 @@ function tryRepairJson(raw: unknown): unknown {
     }
   }
 
-  // 3. Slice from first `{` to last `}` — handles leading/trailing prose.
+  // 3. Find the first complete, balanced JSON object — handles leading/trailing prose.
+  // Using lastIndexOf("}") is unsafe: it can slice across multiple JSON objects or
+  // unbalanced braces, producing a different valid JSON than the AI intended.
+  // Instead, walk forward from the first "{" and stop at its matching "}" by tracking depth.
   const firstBrace = raw.indexOf("{");
-  const lastBrace = raw.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    try {
-      return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
-    } catch {
-      /* fall through */
+  if (firstBrace !== -1) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = firstBrace; i < raw.length; i++) {
+      const ch = raw[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\" && inString) { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(raw.slice(firstBrace, i + 1));
+          } catch {
+            break; // Slice was syntactically invalid — give up
+          }
+        }
+      }
     }
   }
 
@@ -295,20 +362,17 @@ function normalizeCandidateModelType(candidate: unknown): unknown {
  *  - "rule_based" → always RuleBasedProvider
  *  - "openai"     → OpenAIProvider if OPENAI_API_KEY present, else auto-fallback
  *  - "gemini"     → GeminiProvider if GEMINI_API_KEY present, else auto-fallback
+ *  - "groq"       → GroqProvider if GROQ_API_KEY present, else auto-fallback
  *  - "ollama"     → OllamaPaperUnderstandingProvider using configured/default local Ollama
- *  - "auto" / undefined → OpenAI → Gemini → Ollama → RuleBasedProvider → Mock
+ *  - "auto" / undefined → OpenAI → Gemini → Groq → Ollama → RuleBasedProvider
  */
 export function getActiveProvider(
   preferred?: ProviderPreference,
-  runtimeKeys?: {
-    openaiApiKey?: string;
-    geminiApiKey?: string;
-    ollamaBaseUrl?: string;
-    ollamaModel?: string;
-  },
+  runtimeKeys?: ExtractionRuntimeOptions,
 ): ExtractionProvider {
   const hasOpenAI = !!(runtimeKeys?.openaiApiKey || process.env["OPENAI_API_KEY"]);
   const hasGemini = !!(runtimeKeys?.geminiApiKey || process.env["GEMINI_API_KEY"]);
+  const hasGroq = !!(runtimeKeys?.groqApiKey || process.env["GROQ_API_KEY"]);
   const hasOllama = !!(runtimeKeys?.ollamaBaseUrl || process.env["OLLAMA_BASE_URL"]);
 
   if (preferred === "mock") {
@@ -323,6 +387,9 @@ export function getActiveProvider(
   if (preferred === "gemini" && hasGemini) {
     return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
   }
+  if (preferred === "groq" && hasGroq) {
+    return new GroqProvider(undefined, runtimeKeys?.groqApiKey);
+  }
   if (preferred === "ollama") {
     return new OllamaPaperUnderstandingProvider(
       runtimeKeys?.ollamaBaseUrl,
@@ -334,16 +401,13 @@ export function getActiveProvider(
   if (hasOpenAI) return new OpenAIProvider("gpt-4o", runtimeKeys?.openaiApiKey);
   if (hasGemini)
     return new GeminiProvider("gemini-1.5-flash", runtimeKeys?.geminiApiKey);
+  if (hasGroq) return new GroqProvider(undefined, runtimeKeys?.groqApiKey);
   if (hasOllama)
     return new OllamaPaperUnderstandingProvider(
       runtimeKeys?.ollamaBaseUrl,
       runtimeKeys?.ollamaModel,
     );
-  try {
-    return new RuleBasedProvider();
-  } catch {
-    return new MockProvider();
-  }
+  return new RuleBasedProvider();
 }
 
 // ---------- Public entry point ----------
@@ -353,12 +417,7 @@ export const MIN_SOURCE_CHARS = 30;
 export async function runExtraction(
   sourceText: string,
   preferred?: ProviderPreference,
-  runtimeKeys?: {
-    openaiApiKey?: string;
-    geminiApiKey?: string;
-    ollamaBaseUrl?: string;
-    ollamaModel?: string;
-  },
+  runtimeKeys?: ExtractionRuntimeOptions,
 ): Promise<{
   result: ExtractionResult;
   providerName: ProviderName;
@@ -376,51 +435,199 @@ export async function runExtraction(
 
   const hasOpenAI = !!(runtimeKeys?.openaiApiKey || process.env["OPENAI_API_KEY"]);
   const hasGemini = !!(runtimeKeys?.geminiApiKey || process.env["GEMINI_API_KEY"]);
+  const hasGroq = !!(runtimeKeys?.groqApiKey || process.env["GROQ_API_KEY"]);
+  const hasOllama = !!(runtimeKeys?.ollamaBaseUrl || process.env["OLLAMA_BASE_URL"]);
   if (preferred === "openai" && !hasOpenAI) {
     throw new ExtractionProviderError(
       "OpenAI provider selected but OPENAI_API_KEY is not configured.",
       "openai",
+      400,
     );
   }
   if (preferred === "gemini" && !hasGemini) {
     throw new ExtractionProviderError(
       "Gemini provider selected but GEMINI_API_KEY is not configured.",
       "gemini",
+      400,
+    );
+  }
+  if (preferred === "groq" && !hasGroq) {
+    throw new ExtractionProviderError(
+      "Groq provider selected but GROQ_API_KEY is not configured.",
+      "groq",
+      400,
     );
   }
 
   let provider = getActiveProvider(preferred, runtimeKeys);
+  const providerFallbacks: Array<{
+    from: string;
+    to: string;
+    reason: string;
+  }> = [];
+  const documentChunks = runtimeKeys?.documentChunks?.filter((chunk) =>
+    chunk.text.trim().length > 0,
+  );
+  const hasDocumentChunks = (documentChunks?.length ?? 0) > 0;
+
+  // P2.9: Warn when all provided chunks were empty — the caller should know
+  // that chunk-based extraction was silently skipped.
+  if (runtimeKeys?.documentChunks && runtimeKeys.documentChunks.length > 0 && !hasDocumentChunks) {
+    logger.warn(
+      { chunkCount: runtimeKeys.documentChunks.length },
+      "All document chunks were empty after filtering — falling back to flat text extraction",
+    );
+  }
+  const flatStructuredSourceText =
+    hasDocumentChunks && documentChunks
+      ? formatDocumentChunksAsSourceText(documentChunks)
+      : "";
+  const flatProviderSourceText = flatStructuredSourceText || trimmed;
+  let promptTemplateSummary = PROMPT_TEMPLATE_SUMMARY;
+
+  function providerCanUseDocumentChunks(
+    candidateProvider: ExtractionProvider,
+  ): candidateProvider is ExtractionProvider & {
+    extractFromChunks: (
+      documentChunks: PaperUnderstandingDocumentChunk[],
+    ) => Promise<unknown>;
+  } {
+    return typeof candidateProvider.extractFromChunks === "function";
+  }
+
+  async function callProvider(candidateProvider: ExtractionProvider): Promise<unknown> {
+    if (hasDocumentChunks && documentChunks && providerCanUseDocumentChunks(candidateProvider)) {
+      promptTemplateSummary = STRUCTURED_DOCUMENT_PROMPT_TEMPLATE_SUMMARY;
+      return candidateProvider.extractFromChunks(documentChunks);
+    }
+    if (hasDocumentChunks) {
+      promptTemplateSummary = FLAT_STRUCTURED_DOCUMENT_FALLBACK_SUMMARY;
+    }
+    return candidateProvider.extract(flatProviderSourceText);
+  }
+
+  async function callRuleBasedFallback(reason: string): Promise<unknown> {
+    logger.warn(
+      { provider: provider.name, reason },
+      "Auto extraction falling back to RuleBasedProvider",
+    );
+    providerFallbacks.push({ from: provider.name, to: "rule_based", reason });
+    provider = new RuleBasedProvider();
+    return callProvider(provider);
+  }
+
+  function providerErrorStatus(err: unknown): number {
+    if (err instanceof GroqBudgetError) return err.status;
+    if (err instanceof GroqRateLimitError) return 429;
+    if (err instanceof PaperUnderstandingValidationError) return 400;
+    return 502;
+  }
+
+  function providerErrorMessage(err: unknown): string {
+    if (err instanceof GroqBudgetError && err.status === 413) {
+      return err.message;
+    }
+    if (err instanceof PaperUnderstandingValidationError) {
+      return "Groq returned malformed structured data. The app attempted repair/normalization but validation still failed.";
+    }
+    if (err instanceof Error) return err.message;
+    return String(err);
+  }
+
+  function providerErrorDetails(err: unknown): Record<string, unknown> | undefined {
+    if (err instanceof PaperUnderstandingValidationError) {
+      return {
+        provider: provider.name,
+        validationStage: err.validationStage,
+        validationIssues: err.validationIssues.slice(0, 5),
+        debugArtifactPath: err.debugArtifactPath,
+        model: err.model,
+        promptVersion: err.promptVersion,
+        schemaVersion: err.schemaVersion,
+        responseFormatMode: err.responseFormatMode,
+      };
+    }
+    return undefined;
+  }
+
+  async function callOllamaOrRuleBasedFallback(reason: string): Promise<unknown> {
+    if (hasOllama) {
+      const from = provider.name;
+      providerFallbacks.push({ from, to: "ollama", reason });
+      provider = new OllamaPaperUnderstandingProvider(
+        runtimeKeys?.ollamaBaseUrl,
+        runtimeKeys?.ollamaModel,
+      );
+      try {
+        return await callProvider(provider);
+      } catch (ollamaErr) {
+        providerFallbacks.push({
+          from: "ollama",
+          to: "rule_based",
+          reason: ollamaErr instanceof Error ? ollamaErr.message : String(ollamaErr),
+        });
+        provider = new RuleBasedProvider();
+        return callProvider(provider);
+      }
+    }
+    return callRuleBasedFallback(reason);
+  }
 
   // Call the provider, catching any thrown error.
   let providerOutput: unknown;
   try {
-    providerOutput = await provider.extract(trimmed);
+    providerOutput = await callProvider(provider);
   } catch (err) {
-    if ((preferred == null || preferred === "auto") && provider.name === "ollama") {
+    const isAuto = preferred == null || preferred === "auto";
+    if (isAuto && provider.name === "groq") {
+      const reason = err instanceof Error ? err.message : String(err);
+      try {
+        const fallbackReason = err instanceof GroqBudgetError
+          ? `Groq free-tier budget reached. ${reason}`
+            : err instanceof GroqRateLimitError
+            ? reason
+            : err instanceof PaperUnderstandingValidationError
+              ? `Groq failed schema validation; Auto fallback used Ollama/RuleBased.${err.debugArtifactPath ? ` Debug artifact: ${err.debugArtifactPath}.` : ""} ${err.validationIssues.slice(0, 5).join(" | ")}`
+            : `Groq was unavailable or returned invalid output. ${reason}`;
+        providerOutput = await callOllamaOrRuleBasedFallback(fallbackReason);
+      } catch (fallbackErr) {
+        // Log the full fallback chain so the earlier Groq error is not silently lost.
+        if (providerFallbacks.length > 0) {
+          logger.warn({ providerFallbacks }, "All auto-fallback providers failed; error chain:");
+        }
+        throw new ExtractionProviderError(
+          `Auto fallback failed after Groq error: ${
+            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+          }`,
+          provider.name,
+          providerErrorStatus(fallbackErr),
+        );
+      }
+    } else if (isAuto && provider.name === "ollama") {
       logger.warn(
         { err: err instanceof Error ? err.message : String(err) },
         "Ollama unavailable during auto extraction; falling back to RuleBasedProvider",
       );
       try {
-        provider = new RuleBasedProvider();
-        providerOutput = await provider.extract(trimmed);
-      } catch (fallbackErr) {
-        logger.warn(
-          {
-            err:
-              fallbackErr instanceof Error
-                ? fallbackErr.message
-                : String(fallbackErr),
-          },
-          "RuleBasedProvider failed during auto extraction; falling back to MockProvider",
+        providerOutput = await callRuleBasedFallback(
+          err instanceof Error ? err.message : String(err),
         );
-        provider = new MockProvider();
-        providerOutput = await provider.extract(trimmed);
+      } catch (fallbackErr) {
+        throw new ExtractionProviderError(
+          `RuleBasedProvider failed during auto fallback: ${
+            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+          }`,
+          provider.name,
+          providerErrorStatus(fallbackErr),
+        );
       }
     } else {
+      const message = providerErrorMessage(err);
       throw new ExtractionProviderError(
-        `Provider threw: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof PaperUnderstandingValidationError ? message : `Provider threw: ${message}`,
         provider.name,
+        providerErrorStatus(err),
+        providerErrorDetails(err),
       );
     }
   }
@@ -507,17 +714,97 @@ export async function runExtraction(
     );
   }
 
+  const finalized = finalizeExtractionResult(parsed.data);
+
+  if (finalized.warnings.length > 0) {
+    logger.warn({ warnings: finalized.warnings, provider: provider.name }, "Extraction finalizer warnings");
+  }
+
+  // AUDIT-10: report chunk-budget truncation. If chunks exceeded the prompt
+  // budget the user must see it — silent truncation has misled past extractions.
+  let chunkTruncation: ChunkTruncationReport | null = null;
+  if (hasDocumentChunks && documentChunks && documentChunks.length > 0) {
+    const report = analyzeChunkTruncation(documentChunks, DEFAULT_MAX_TOTAL_CHARS);
+    if (report.droppedChars > 0 || report.droppedChunks > 0) {
+      chunkTruncation = report;
+    }
+  }
+
+  // AUDIT-9: surface visual-content (figures/tables) warnings from chunks so
+  // the audit panel says clearly that text-layer extraction may have missed
+  // information that lives in figures or images.
+  const sourceWarnings: string[] = [];
+  if (hasDocumentChunks && documentChunks) {
+    const chunksWithFigures = documentChunks.filter((chunk) => chunk.contains_figure_reference).length;
+    const chunksWithTables = documentChunks.filter((chunk) => chunk.contains_table_like_text).length;
+    if (chunksWithFigures > 0) {
+      sourceWarnings.push(
+        `Source PDF contains ${chunksWithFigures} chunk(s) with figure references. Text-layer extraction does not read figures or images; verify that critical information is not figure-only.`,
+      );
+    }
+    if (chunksWithTables > 0) {
+      sourceWarnings.push(
+        `Source PDF contains ${chunksWithTables} chunk(s) with table-like content. Verify that columnar values were preserved by the text-layer parser.`,
+      );
+    }
+  }
+  if (chunkTruncation) {
+    sourceWarnings.push(
+      `Prompt chunk budget exceeded: ${chunkTruncation.droppedChars} char(s) across ${chunkTruncation.droppedChunks} chunk(s) were dropped from the AI prompt (budget=${chunkTruncation.budget}, total=${chunkTruncation.totalChars}). Extraction may be incomplete.`,
+    );
+  }
+
+  // AUDIT-6: basic unit validation. Walk every parameter + state variable
+  // unit against the curated allow-list; non-matches are surfaced as warnings
+  // so users see "kJ/zeptosecond" instead of trusting it as valid.
+  const unitFlaggedRows = [
+    ...findUnitWarnings(
+      finalized.result.parameters.map((p) => ({ symbol: p.symbol, unit: p.unit })),
+    ),
+    ...findUnitWarnings(
+      finalized.result.state_variables.map((v) => ({ symbol: v.symbol, unit: v.unit })),
+    ),
+  ];
+  const unitWarnings = unitFlaggedRows.map(
+    (row) =>
+      `Unrecognised unit '${row.unit}' on '${row.symbol}'. Treat as raw/unvalidated until confirmed against the source.`,
+  );
+
+  const auditTokenUsage =
+    tokenMeta ||
+    providerFallbacks.length > 0 ||
+    finalized.warnings.length > 0 ||
+    sourceWarnings.length > 0 ||
+    chunkTruncation ||
+    unitWarnings.length > 0
+      ? {
+          ...(tokenMeta ?? {}),
+          ...(providerFallbacks.length > 0 ? { providerFallbacks } : {}),
+          ...(finalized.warnings.length > 0
+            ? { finalizerWarnings: finalized.warnings }
+            : {}),
+          ...(sourceWarnings.length > 0 ? { sourceWarnings } : {}),
+          ...(chunkTruncation ? { chunkTruncation } : {}),
+          ...(unitWarnings.length > 0 ? { unitWarnings } : {}),
+        }
+      : null;
+
   const audit: AuditData = {
     providerModel: providerModelId,
     systemPrompt: capturedSystemPrompt,
-    promptTemplateSummary: PROMPT_TEMPLATE_SUMMARY,
+    promptTemplateSummary:
+      providerFallbacks.length > 0
+        ? `${promptTemplateSummary} Provider fallback: ${providerFallbacks
+            .map((fallback) => `${fallback.from} -> ${fallback.to}: ${fallback.reason}`)
+            .join(" | ")}`
+        : promptTemplateSummary,
     rawProviderResponse,
     repairStatus,
     validationErrors,
-    tokenUsage: tokenMeta,
+    tokenUsage: auditTokenUsage,
   };
 
-  return { result: parsed.data, providerName: provider.name, audit };
+  return { result: finalized.result, providerName: provider.name, audit };
 }
 
 // ---------- DB mapping ----------
@@ -537,6 +824,7 @@ export type DbEquationRow = {
   plaintext: string;
   meaning: string;
   variablesInvolved: string[];
+  equationType: ExtractedEquationType;
   confidence: "high" | "medium" | "low";
   description: string;
   sourceQuote: string;
@@ -548,9 +836,10 @@ export type DbVariableRow = {
   name: string;
   meaning: string;
   unit: string;
-  role: "state" | "input" | "output";
+  role: ExtractedRole;
   confidence: "high" | "medium" | "low";
   sourceQuote: string;
+  originalValue?: Record<string, unknown> | null;
 };
 
 export type DbParameterRow = {
@@ -558,9 +847,12 @@ export type DbParameterRow = {
   symbol: string;
   name: string;
   value: number;
+  valueRaw: string;
+  valueNumeric: number | null;
   unit: string;
   confidence: "high" | "medium" | "low";
   sourceQuote: string;
+  originalValue?: Record<string, unknown> | null;
 };
 
 export type DbAssumptionRow = {
@@ -580,23 +872,38 @@ export type MappedExtraction = {
 };
 
 const NUMBER_RE = /-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/;
+const UNKNOWN_PARAMETER_VALUE_RE =
+  /^(?:unknown|not\s+specified|not\s+reported|n\.?d\.?|n\/a|na|none|null|missing|uncertain|\u2014|-|\?)$/i;
 
-function parseNumeric(value: string): { num: number; ok: boolean } {
+export function parseParameterValue(value: string): {
+  raw: string;
+  numeric: number | null;
+  ok: boolean;
+} {
   const trimmed = value.trim();
+  if (trimmed === "" || UNKNOWN_PARAMETER_VALUE_RE.test(trimmed)) {
+    return { raw: trimmed || "unknown", numeric: null, ok: false };
+  }
   const direct = Number(trimmed);
-  if (Number.isFinite(direct)) return { num: direct, ok: true };
+  if (Number.isFinite(direct)) return { raw: trimmed, numeric: direct, ok: true };
   const m = trimmed.match(NUMBER_RE);
   if (m) {
     const n = Number(m[0]);
-    if (Number.isFinite(n)) return { num: n, ok: true };
+    if (Number.isFinite(n)) return { raw: trimmed, numeric: n, ok: true };
   }
-  return { num: 0, ok: false };
+  return { raw: trimmed, numeric: null, ok: false };
 }
 
-/** Reduce the rich provider-side role enum to the simplified DB enum. */
-function downgradeRole(role: string): "state" | "input" | "output" {
-  if (role === "state" || role === "input" || role === "output") return role;
-  return "input";
+function inferEquationType(eq: ExtractedEquation): ExtractedEquationType {
+  if (eq.equation_type && eq.equation_type !== "unknown") return eq.equation_type;
+  const text = `${eq.equation_latex} ${eq.equation_plaintext}`;
+  if (
+    /(?:^|[^A-Za-z])d[A-Za-z][A-Za-z0-9_]*\s*\/\s*dt\s*=/.test(text) ||
+    /\\frac\s*\{\s*d[A-Za-z][A-Za-z0-9_]*\s*\}\s*\{\s*dt\s*\}/.test(text)
+  ) {
+    return "dynamic_ode";
+  }
+  return eq.equation_type ?? "unknown";
 }
 
 function buildSystemDescription(r: ExtractionResult): string {
@@ -632,9 +939,9 @@ function buildOdeTemplate(r: ExtractionResult): string {
     .map((v) => v.symbol);
   const paramAssignments = r.parameters
     .map((p) => {
-      const { num, ok } = parseNumeric(p.value);
+      const { numeric, ok } = parseParameterValue(p.value);
       const note = ok ? "" : `  # NOTE: could not parse "${p.value}"`;
-      return `    "${p.symbol}": ${ok ? num : 0.0},  # ${p.unit || "—"}${note}`;
+      return `    "${p.symbol}": ${ok ? numeric : "None"},  # ${p.unit || "—"}${note}`;
     })
     .join("\n");
   const initial = stateSyms.length
@@ -690,7 +997,27 @@ function formatEquationDescription(
   return parts.join(" ");
 }
 
+function variableOriginalValue(variable: ExtractedStateVariable): Record<string, unknown> | null {
+  if (!variable.initial_condition) return null;
+  return {
+    initial_condition: {
+      kind: "initial_condition",
+      ...variable.initial_condition,
+    },
+  };
+}
+
+function parameterOriginalValue(parameter: ExtractedParameter): Record<string, unknown> | null {
+  if (parameter.status !== "initial_condition") return null;
+  return {
+    kind: "initial_condition",
+    status: parameter.status,
+    source_context: parameter.source_context,
+  };
+}
+
 export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
+  r = finalizeExtractionResult(r).result;
   const extraction: DbExtractionRow = {
     modelCardTitle: r.paper_title_or_topic,
     domain: r.system_type,
@@ -706,6 +1033,7 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
     plaintext: eq.equation_plaintext,
     meaning: eq.meaning,
     variablesInvolved: eq.variables_involved,
+    equationType: inferEquationType(eq),
     confidence: eq.confidence,
     description: formatEquationDescription(
       eq.label,
@@ -721,23 +1049,27 @@ export function mapExtractionToDb(r: ExtractionResult): MappedExtraction {
     name: v.name,
     meaning: v.meaning,
     unit: v.unit,
-    role: downgradeRole(v.role),
+    role: v.role,
     confidence: v.confidence,
     sourceQuote: v.source_context,
+    originalValue: variableOriginalValue(v),
   }));
 
   const parameters: DbParameterRow[] = r.parameters.map((p, i) => {
-    const { num, ok } = parseNumeric(p.value);
+    const { raw, numeric, ok } = parseParameterValue(p.value);
     return {
       ordinal: i,
       symbol: p.symbol,
       name: p.name,
-      value: num,
+      value: numeric ?? 0,
+      valueRaw: raw,
+      valueNumeric: numeric,
       unit: p.unit,
       confidence: ok ? p.confidence : "low",
       sourceQuote:
         (ok ? "" : `(value "${p.value}" could not be parsed numerically) `) +
         p.source_context,
+      originalValue: parameterOriginalValue(p),
     };
   });
 

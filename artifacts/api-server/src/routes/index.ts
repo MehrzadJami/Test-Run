@@ -6,12 +6,14 @@ import exportAllRouter from "./export-all";
 import editingRouter from "./editing";
 import authRouter from "./auth";
 import shareRouter from "./share";
+import providersRouter from "./providers";
 
 const router: IRouter = Router();
 
 router.use(authRouter);
 router.use(healthRouter);
 router.use(pdfRouter);
+router.use(providersRouter);
 router.use(exportAllRouter);
 router.use(projectsRouter);
 router.use(editingRouter);

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   usePatchVariable,
@@ -35,6 +35,7 @@ import {
 import { Pencil, RotateCcw, Loader2 } from "lucide-react";
 
 type Confidence = "high" | "medium" | "low";
+type VariableRole = "state" | "input" | "output" | "parameter" | "control";
 
 function ConfidenceBadge({ value }: { value?: Confidence | string | null }) {
   if (!value) return null;
@@ -70,6 +71,15 @@ export function VariablesTab({ projectId, variables }: Props) {
   const [editing, setEditing] = useState<Variable | null>(null);
   const [draft, setDraft] = useState<PatchVariableInput>({});
   const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    return () => {
+      setEditing(null);
+      setDraft({});
+      patch.reset();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function openEdit(v: Variable) {
     setEditing(v);
@@ -186,12 +196,14 @@ export function VariablesTab({ projectId, variables }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label>Role</Label>
-                <Select value={draft.role ?? "state"} onValueChange={(v) => setDraft((d) => ({ ...d, role: v as "state" | "input" | "output" }))}>
+                <Select value={draft.role ?? "state"} onValueChange={(v) => setDraft((d) => ({ ...d, role: v as VariableRole }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="state">state</SelectItem>
                     <SelectItem value="input">input</SelectItem>
                     <SelectItem value="output">output</SelectItem>
+                    <SelectItem value="parameter">parameter</SelectItem>
+                    <SelectItem value="control">control</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

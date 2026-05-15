@@ -19,10 +19,24 @@ import type {
   RawExtraction,
   ReproducibilityReport,
 } from "./reproducibility";
+import { analyzeReproducibility } from "./reproducibility";
 import type { ModelAssemblyReport } from "./model-assembly";
 import type { UnitCheckReport } from "./unit-checker";
+import { runUnitCheck } from "./unit-checker";
 import { generateJupyterNotebook } from "./notebook-generator";
 import { MODEL_TYPE_DISPLAY_NAMES } from "@workspace/domain-classifier";
+import {
+  analyzeChemEModel,
+  compareAssemblyWithChemEBrain,
+  type AssemblyChemEBrainComparison,
+  type AssemblyReportLike,
+  type ChemEBrainInput,
+  type ChemEBrainReport,
+} from "@workspace/cheme-brain";
+import {
+  getParameterDisplayValue,
+  hasKnownParameterValue,
+} from "./parameter-values";
 
 // ─── Public input type ─────────────────────────────────────────────────────────
 
@@ -60,13 +74,384 @@ function safe(v: unknown): string {
   return v == null ? "" : String(v).trim();
 }
 
-/** Escape a CSV cell: wrap in quotes and double any internal quotes. */
+function isPlaceholderSymbol(symbol: unknown): boolean {
+  const text = safe(symbol).toLowerCase();
+  return text === "" || text === "-" || text === "unknown" || text === "n/a";
+}
+
+function sanitizeRawExtraction(raw: RawExtraction | null): RawExtraction | null {
+  if (!raw) return raw;
+  return {
+    ...raw,
+    state_variables: raw.state_variables?.filter(
+      (variable) => !(isPlaceholderSymbol(variable.symbol) && isPlaceholderSymbol(variable.name)),
+    ),
+    parameters: raw.parameters?.filter((parameter) => !isPlaceholderSymbol(parameter.symbol)),
+    equations: raw.equations?.map((equation) => ({
+      ...equation,
+      variables_involved: equation.variables_involved?.filter((symbol) => !isPlaceholderSymbol(symbol)),
+    })),
+    model_card: raw.model_card
+      ? {
+          ...raw.model_card,
+          inputs: raw.model_card.inputs?.filter((symbol) => !isPlaceholderSymbol(symbol)),
+          outputs: raw.model_card.outputs?.filter((symbol) => !isPlaceholderSymbol(symbol)),
+          control_variables: raw.model_card.control_variables?.filter((symbol) => !isPlaceholderSymbol(symbol)),
+        }
+      : raw.model_card,
+  };
+}
+
+function isMissingUnit(unit: unknown): boolean {
+  const text = safe(unit).toLowerCase();
+  return text === "" || text === "-" || text === "unknown" || text === "n/a";
+}
+
+function normalizedUnit(unit: unknown): string {
+  return safe(unit).toLowerCase().replace(/\s+/g, "");
+}
+
+function looksLikeRateUnit(unit: unknown): boolean {
+  const text = safe(unit).toLowerCase();
+  return /^1\s*\//.test(text) || /\/\s*(h|hr|hour|min|d|day|s)\b/.test(text) || /\^-?1/.test(text);
+}
+
+function looksLikeMonodMuEquation(equation: AnalysisEquation): boolean {
+  const text = `${equation.latex} ${equation.description}`.replace(/\s+/g, "");
+  return /^mu=/.test(text) && /mumax\*?S\/\(Ks\+S\)/.test(text);
+}
+
+function appendInferenceNote(sourceQuote: string, note: string): string {
+  if (sourceQuote.includes(note)) return sourceQuote;
+  return [sourceQuote, note].filter(Boolean).join(" ");
+}
+
+function inferMonodMuUnit(
+  equations: AnalysisEquation[],
+  variables: AnalysisVariable[],
+  parameters: AnalysisParameter[],
+  raw: RawExtraction | null,
+): { variables: AnalysisVariable[]; raw: RawExtraction | null } {
+  const hasMuEquation = equations.some(looksLikeMonodMuEquation)
+    || (raw?.equations ?? []).some((equation) =>
+      looksLikeMonodMuEquation({
+        id: 0,
+        latex: equation.equation_latex ?? equation.equation_plaintext ?? "",
+        description: equation.meaning ?? "",
+        sourceQuote: equation.source_context ?? "",
+        equationType: equation.equation_type,
+      }),
+    );
+  if (!hasMuEquation) return { variables, raw };
+
+  const mumax = parameters.find((parameter) => safe(parameter.symbol).toLowerCase() === "mumax");
+  const sUnit = variables.find((variable) => safe(variable.symbol) === "S")?.unit
+    ?? parameters.find((parameter) => safe(parameter.symbol) === "S")?.unit;
+  const ksUnit = parameters.find((parameter) => safe(parameter.symbol) === "Ks")?.unit;
+  const rateUnit = safe(mumax?.unit);
+  if (
+    !rateUnit ||
+    !looksLikeRateUnit(rateUnit) ||
+    normalizedUnit(sUnit) === "" ||
+    normalizedUnit(sUnit) !== normalizedUnit(ksUnit)
+  ) {
+    return { variables, raw };
+  }
+
+  const note = "Unit inferred from Monod growth equation and mumax unit.";
+  const nextVariables = variables.map((variable) => {
+    if (safe(variable.symbol) !== "mu" || !isMissingUnit(variable.unit)) return variable;
+    return {
+      ...variable,
+      unit: rateUnit,
+      sourceQuote: appendInferenceNote(variable.sourceQuote, note),
+    };
+  });
+
+  const nextRaw = raw
+    ? {
+        ...raw,
+        state_variables: raw.state_variables?.map((variable) => {
+          if (safe(variable.symbol) !== "mu" || !isMissingUnit(variable.unit)) return variable;
+          return {
+            ...variable,
+            unit: rateUnit,
+            source_context: appendInferenceNote(variable.source_context ?? "", note),
+          };
+        }),
+      }
+    : raw;
+
+  return { variables: nextVariables, raw: nextRaw };
+}
+
+function providerDisclosure(providerUsed: string): string | null {
+  if (providerUsed === "mock") {
+    return "Demo mode: this export was generated by MockProvider. It is a fixed demonstration and does not reflect source text.";
+  }
+  if (providerUsed === "rule_based") {
+    return "Rule-based local extraction: deterministic flat/local extraction was used. It is not full-paper semantic AI understanding.";
+  }
+  if (providerUsed === "groq") {
+    return "Groq cloud AI was used for paper understanding. AI extraction must be manually verified against the source.";
+  }
+  return null;
+}
+
+const CHEME_BRAIN_DISCLAIMER =
+  "This is an advisory engineering audit generated from extracted evidence. It is not validation, certification, or proof of model correctness.";
+
+function numericOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildChemEBrainInput(input: ModelPackageInput): ChemEBrainInput {
+  const raw = input.raw;
+  return {
+    extraction: {
+      title: input.title,
+      project_name: input.projectName,
+      provider_used: input.providerUsed,
+      domain: input.domain,
+      model_type: raw?.model_type ?? raw?.model_card?.model_type,
+      system_type: input.systemType ?? raw?.system_type,
+      process_description: input.systemDescription ?? raw?.process_description,
+      problem_statement: input.problemStatement,
+      model_card: raw?.model_card,
+      rawExtractionJson: raw,
+      variables: input.variables.map((variable) => ({
+        symbol: variable.symbol,
+        name: variable.name,
+        role: variable.role,
+        unit: variable.unit,
+        sourceQuote: variable.sourceQuote,
+        originalValue: variable.originalValue,
+      })),
+      parameters: input.parameters.map((parameter) => ({
+        symbol: parameter.symbol,
+        name: parameter.name,
+        value: parameter.value,
+        value_raw: parameter.valueRaw ?? safe(parameter.value),
+        value_numeric: parameter.valueNumeric ?? numericOrNull(parameter.value),
+        unit: parameter.unit,
+        confidence: parameter.confidence,
+        sourceQuote: parameter.sourceQuote,
+        originalValue: parameter.originalValue,
+      })),
+      equations: input.equations.map((equation) => ({
+        id: equation.id,
+        equation_plaintext: equation.latex,
+        equation_latex: equation.latex,
+        equation_type: equation.equationType,
+        meaning: equation.description,
+        sourceQuote: equation.sourceQuote,
+      })),
+      initial_conditions: raw?.initial_conditions,
+      assumptions: input.assumptionItems.map((item) => item.text),
+      limitations: input.limitationItems.map((item) => item.text),
+    },
+    assemblyReport: input.assemblyReport,
+    reproducibilityReport: input.report,
+    unitReport: input.unitReport,
+  };
+}
+
+function mdCell(value: unknown): string {
+  return safe(value).replace(/\|/g, "\\|").replace(/\n+/g, " ");
+}
+
+function statusLabel(status: string): string {
+  return `\`${status}\``;
+}
+
+function makeChecklistRows(report: ChemEBrainReport, status: string): string[] {
+  const items = report.required_information_checklist.filter((item) => item.evidenceStatus === status);
+  if (items.length === 0) return ["_(none)_"];
+  const lines = ["| Requirement | Category | Evidence | Why it matters |", "|---|---|---|---|"];
+  for (const item of items) {
+    lines.push(
+      `| ${mdCell(item.label)} | ${statusLabel(item.evidenceStatus)} ${mdCell(item.category)} | ${mdCell((item.evidence ?? []).join("; ") || item.sourceQuote || "not found")} | ${mdCell(item.whyItMatters ?? item.description)} |`,
+    );
+  }
+  return lines;
+}
+
+function makeChemEBrainReportMd(report: ChemEBrainReport, comparison: AssemblyChemEBrainComparison): string {
+  const lines: string[] = [];
+
+  lines.push("# ChemE Brain Shadow Report");
+  lines.push("");
+  lines.push(CHEME_BRAIN_DISCLAIMER);
+  lines.push("");
+  lines.push("> Shadow mode: this report is exported for engineering review only. It does not change model-card values, model assembly, API responses, UI badges, or simulation behavior.");
+  lines.push("");
+
+  lines.push("## ChemE Brain verdict");
+  lines.push("");
+  lines.push(`- Advisory simulation support: ${statusLabel(report.simulation_support.status)}`);
+  lines.push(`- Reason: ${report.simulation_support.reason}`);
+  lines.push("");
+
+  lines.push("## Assembly vs ChemE Brain — Shadow Comparison");
+  lines.push("");
+  lines.push("This comparison is advisory and does not change current readiness or simulation behavior.");
+  lines.push("");
+  lines.push(`- Severity: ${statusLabel(comparison.severity)}`);
+  lines.push(`- Recommended action: ${comparison.recommended_action}`);
+  lines.push("");
+  if (comparison.disagreements.length === 0) {
+    lines.push("No shadow disagreement was detected for the checked assembly conditions.");
+  } else {
+    lines.push("| Severity | Category | Model assembly says | ChemE Brain says | Why it matters | Recommended action |");
+    lines.push("|---|---|---|---|---|---|");
+    for (const item of comparison.disagreements) {
+      lines.push(
+        `| ${item.severity} | ${mdCell(item.category)} | ${mdCell(item.assembly_says)} | ${mdCell(item.cheme_brain_says)} | ${mdCell(item.why_it_matters)} | ${mdCell(item.recommended_action)} |`,
+      );
+    }
+  }
+  lines.push("");
+
+  lines.push("## Model type and confidence");
+  lines.push("");
+  lines.push(`- Canonical model type: \`${report.canonical_model_type}\``);
+  lines.push(`- Confidence: \`${report.confidence}\``);
+  lines.push(`- Matched equations: ${report.confidence_explanation.matchedEquations.join(", ") || "none"}`);
+  lines.push(`- Matched parameters: ${report.confidence_explanation.matchedParameters.join(", ") || "none"}`);
+  lines.push(`- Matched keywords: ${report.confidence_explanation.matchedKeywords.join(", ") || "none"}`);
+  lines.push(`- Matched template requirements: ${report.confidence_explanation.matchedTemplateRequirements.join(", ") || "none"}`);
+  lines.push("");
+
+  lines.push("## What was observed");
+  lines.push("");
+  lines.push(...makeChecklistRows(report, "observed"));
+  lines.push("");
+
+  lines.push("## What was inferred");
+  lines.push("");
+  const inferredRoles = report.corrected_roles.filter((role) => role.evidenceStatus === "inferred");
+  const inferredUnits = report.inferred_units.filter((unit) => unit.evidenceStatus === "inferred");
+  if (inferredRoles.length === 0 && inferredUnits.length === 0) {
+    lines.push("_(none)_");
+  } else {
+    for (const role of inferredRoles) {
+      lines.push(`- ${statusLabel(role.evidenceStatus)} \`${role.symbol}\` → ${role.recommendedRole}: ${role.reason}`);
+    }
+    for (const unit of inferredUnits) {
+      lines.push(`- ${statusLabel(unit.evidenceStatus)} \`${unit.symbol}\` unit expectation \`${unit.expectedUnit}\`: ${unit.note}`);
+    }
+  }
+  lines.push("");
+
+  lines.push("## What is missing");
+  lines.push("");
+  if (report.missing_requirements.length === 0) {
+    lines.push("_(none)_");
+  } else {
+    lines.push("| Missing item | Category | Severity | Why needed | Suggested sources |");
+    lines.push("|---|---|---|---|---|");
+    for (const item of report.missing_requirements) {
+      lines.push(
+        `| ${mdCell(item.item)} | ${statusLabel("missing")} ${mdCell(item.category)} | ${item.severity} | ${mdCell(item.whyNeeded)} | ${mdCell(item.suggestedSources.map((source) => source.sourceType).join(", "))} |`,
+      );
+    }
+  }
+  lines.push("");
+
+  lines.push("## Equation classification");
+  lines.push("");
+  if (report.equation_classification.length === 0) {
+    lines.push("_(none)_");
+  } else {
+    lines.push("| Equation | Classification | Evidence status | Reason |");
+    lines.push("|---|---|---|---|");
+    for (const equation of report.equation_classification) {
+      lines.push(
+        `| \`${mdCell(equation.equationPattern)}\` | ${equation.recommendedType} | ${statusLabel(equation.evidenceStatus)} | ${mdCell(equation.reason)} |`,
+      );
+    }
+  }
+  lines.push("");
+
+  lines.push("## Variable/parameter role review");
+  lines.push("");
+  if (report.corrected_roles.length === 0) {
+    lines.push("_(none)_");
+  } else {
+    lines.push("| Symbol | Extracted role | Recommended role | Evidence status | Reason |");
+    lines.push("|---|---|---|---|---|");
+    for (const role of report.corrected_roles) {
+      lines.push(
+        `| \`${mdCell(role.symbol)}\` | ${mdCell(role.extractedRole || "not reported")} | ${role.recommendedRole} | ${statusLabel(role.evidenceStatus)} | ${mdCell(role.reason)} |`,
+      );
+    }
+  }
+  lines.push("");
+
+  lines.push("## Unit/convention review");
+  lines.push("");
+  if (report.inferred_units.length === 0 && report.contradictions.length === 0) {
+    lines.push("_(no inferred units or contradictions)_");
+  } else {
+    for (const unit of report.inferred_units) {
+      lines.push(`- ${statusLabel(unit.evidenceStatus)} \`${unit.symbol}\`: expected \`${unit.expectedUnit}\`. ${unit.note}`);
+    }
+    for (const contradiction of report.contradictions) {
+      lines.push(`- ${statusLabel("conflicting")} ${contradiction}`);
+    }
+  }
+  lines.push("");
+
+  lines.push("## Simulation support");
+  lines.push("");
+  lines.push(`- Advisory status: ${statusLabel(report.simulation_support.status)}`);
+  lines.push(`- Explanation: ${report.simulation_support.reason}`);
+  lines.push("- Runtime behavior: unchanged by this shadow report.");
+  lines.push("");
+
+  lines.push("## Recommended next sources");
+  lines.push("");
+  if (report.recommended_next_sources.length === 0) {
+    lines.push("_(none)_");
+  } else {
+    for (const source of report.recommended_next_sources) {
+      lines.push(`- \`${source.sourceType}\`: ${source.reason}`);
+    }
+  }
+  lines.push("");
+
+  lines.push("## Safety notes");
+  lines.push("");
+  lines.push("| Severity | Message | Safety rule |");
+  lines.push("|---|---|---|");
+  for (const warning of report.warnings) {
+    lines.push(`| ${warning.severity} | ${mdCell(warning.message)} | ${mdCell(warning.safetyRule)} |`);
+  }
+  lines.push("");
+  lines.push("### Audit trail");
+  lines.push("");
+  for (const item of report.audit_trail) {
+    lines.push(`- ${item}`);
+  }
+
+  return lines.join("\n");
+}
+
+/** Escape a CSV cell: wrap in quotes, double internal quotes, and neutralise
+ *  formula-injection prefixes (=, +, @, -) so the value is not executed as a
+ *  spreadsheet formula when the CSV is opened in Excel / Google Sheets. */
 function csvCell(v: unknown): string {
   const s = safe(v);
-  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-    return `"${s.replace(/"/g, '""')}"`;
+  // Prefix neutralisation: a cell starting with =, +, @, or - could be
+  // interpreted as a formula by spreadsheet apps. Prepend a tab to defuse it.
+  const safe_s = /^[=+@\-]/.test(s) ? `\t${s}` : s;
+  if (safe_s.includes(",") || safe_s.includes('"') || safe_s.includes("\n") || safe_s.includes("\t")) {
+    return `"${safe_s.replace(/"/g, '""')}"`;
   }
-  return s;
+  return safe_s;
 }
 
 function csvRow(...cells: unknown[]): string {
@@ -91,7 +476,7 @@ function unitStatusLabel(s: UnitCheckReport["unit_check_status"]): string {
 
 // ─── File generators ──────────────────────────────────────────────────────────
 
-function makeReadme(input: ModelPackageInput): string {
+function makeReadme(input: ModelPackageInput, chemEBrainReport?: ChemEBrainReport): string {
   const {
     title, projectName, providerUsed, systemType,
     systemDescription, problemStatement,
@@ -100,7 +485,7 @@ function makeReadme(input: ModelPackageInput): string {
   } = input;
 
   const date = new Date().toISOString().slice(0, 10);
-  const paramsWithValues = parameters.filter((p) => p.value != null && String(p.value).trim() !== "").length;
+  const paramsWithValues = parameters.filter(hasKnownParameterValue).length;
   const criticals = report.missing_items.filter((m) => m.severity === "critical");
   const warnings  = report.missing_items.filter((m) => m.severity === "warning");
   const highUnits = unitReport.warnings.filter((w) => w.severity === "high").length;
@@ -111,6 +496,8 @@ function makeReadme(input: ModelPackageInput): string {
   lines.push(`# ${title}`);
   lines.push(`**Project:** ${projectName}`);
   lines.push(`**Generated by:** ChemAI Model Compiler  |  **Provider:** ${providerUsed}  |  **Date:** ${date}`);
+  const disclosure = providerDisclosure(providerUsed);
+  if (disclosure) lines.push(`**Provider warning:** ${disclosure}`);
   lines.push(`**Review status:** ${review?.status ?? "extracted"}`);
   if (review?.reviewer_name) lines.push(`**Reviewer:** ${review.reviewer_name}`);
   if (review?.reviewed_at) lines.push(`**Reviewed at:** ${review.reviewed_at}`);
@@ -163,6 +550,25 @@ function makeReadme(input: ModelPackageInput): string {
   lines.push(`| Assumptions | ${assumptionItems.length} | extracted from source text |`);
   lines.push(`| Limitations | ${limitationItems.length} | extracted from source text |`);
   lines.push("");
+
+  if (chemEBrainReport) {
+    lines.push(hr("="));
+    lines.push("## ChemE Brain readiness advisory");
+    lines.push(hr("="));
+    lines.push("");
+    lines.push(`**Verdict:** ${chemEBrainReport.simulation_support.status}`);
+    lines.push(`**Reason:** ${chemEBrainReport.simulation_support.reason}`);
+    if (chemEBrainReport.missing_requirements.length > 0) {
+      lines.push("");
+      lines.push("**Top blockers:**");
+      for (const missing of chemEBrainReport.missing_requirements.slice(0, 6)) {
+        lines.push(`- ${missing.item}: ${missing.whyNeeded}`);
+      }
+      lines.push("");
+      lines.push("You can still export the scaffold/model package while these blockers are resolved.");
+    }
+    lines.push("");
+  }
 
   lines.push(hr("="));
   lines.push("## Reproducibility assessment");
@@ -272,6 +678,8 @@ function makeReadme(input: ModelPackageInput): string {
   lines.push("| `assumptions.md` | Model assumptions from the source |");
   lines.push("| `limitations.md` | Model limitations from the source |");
   lines.push("| `missing_information.md` | Reproducibility gaps and recommended next steps |");
+  lines.push("| `cheme_brain_report.json` | ChemE Brain shadow engineering audit (machine-readable) |");
+  lines.push("| `cheme_brain_report.md` | ChemE Brain shadow engineering audit (human-readable) |");
   if (assemblyReport) {
     lines.push("| `model_assembly_report.json` | Full model assembly readiness analysis (machine-readable) |");
     lines.push("| `missing_requirements.md` | Source requests and missing model requirements |");
@@ -330,6 +738,8 @@ function makeModelCard(input: ModelPackageInput): string {
   lines.push(`| Domain | ${domain} |`);
   if (systemType) lines.push(`| System type | ${systemType} |`);
   lines.push(`| Provider | ${providerUsed} |`);
+  const disclosure = providerDisclosure(providerUsed);
+  if (disclosure) lines.push(`| Provider warning | ${disclosure} |`);
   lines.push(`| Reproducibility | ${report.overall_score}/100 |`);
   if (assemblyReport) {
     lines.push(`| Assembly status | ${assemblyReport.assembly_status} |`);
@@ -383,7 +793,7 @@ function makeModelCard(input: ModelPackageInput): string {
     lines.push("| Symbol | Value | Unit | Confidence | Source |");
     lines.push("|---|---|---|---|---|");
     for (const p of parameters) {
-      lines.push(`| \`${p.symbol}\` | ${safe(p.value) || "—"} | ${safe(p.unit) || "—"} | ${p.confidence} | ${safe(p.sourceQuote).slice(0, 80)}… |`);
+      lines.push(`| \`${p.symbol}\` | ${getParameterDisplayValue(p)} | ${safe(p.unit) || "—"} | ${p.confidence} | ${safe(p.sourceQuote).slice(0, 80)}… |`);
     }
   }
   lines.push("");
@@ -396,6 +806,7 @@ function makeModelCard(input: ModelPackageInput): string {
     for (let i = 0; i < equations.length; i++) {
       const eq = equations[i];
       lines.push(`### Equation ${i + 1}: ${eq.description || "(no description)"}`);
+      if (eq.equationType) lines.push(`**Type:** ${eq.equationType}`);
       if (eq.latex) lines.push(`\`${eq.latex}\``);
       if (eq.sourceQuote) lines.push(`\n> ${eq.sourceQuote}`);
       lines.push("");
@@ -438,7 +849,7 @@ function makeParametersCsv(parameters: AnalysisParameter[]): string {
     csvRow("symbol", "value", "unit", "confidence", "source_quote"),
   ];
   for (const p of parameters) {
-    rows.push(csvRow(p.symbol, p.value ?? "", p.unit ?? "", p.confidence, p.sourceQuote));
+    rows.push(csvRow(p.symbol, getParameterDisplayValue(p), p.unit ?? "", p.confidence, p.sourceQuote));
   }
   return rows.join("\n");
 }
@@ -469,6 +880,7 @@ function makeEquationsMd(equations: AnalysisEquation[], raw: RawExtraction | nul
         lines.push(`**Plain text:** ${eq.equation_plaintext}`);
       }
       if (eq.meaning) lines.push(`**Meaning:** ${eq.meaning}`);
+      if (eq.equation_type) lines.push(`**Type:** ${eq.equation_type}`);
       if ((eq.variables_involved ?? []).length > 0) {
         lines.push(`**Symbols involved:** ${eq.variables_involved!.join(", ")}`);
       }
@@ -489,6 +901,7 @@ function makeEquationsMd(equations: AnalysisEquation[], raw: RawExtraction | nul
         lines.push(eq.latex);
         lines.push("```");
       }
+      if (eq.equationType) lines.push(`**Type:** ${eq.equationType}`);
       if (eq.sourceQuote) {
         lines.push("");
         lines.push(`> ${eq.sourceQuote}`);
@@ -730,18 +1143,63 @@ function makeSourceExcerpt(
 export function generateModelPackage(
   input: ModelPackageInput
 ): Record<string, string> {
-  const { equations, variables, parameters, assumptionItems, limitationItems, raw, report, assemblyReport, unitReport, pythonCode } = input;
+  const sanitizedRaw = sanitizeRawExtraction(input.raw);
+  const sanitizedVariables = input.variables.filter(
+    (variable) => !(isPlaceholderSymbol(variable.symbol) && isPlaceholderSymbol(variable.name)),
+  );
+  const sanitizedParameters = input.parameters.filter((parameter) => !isPlaceholderSymbol(parameter.symbol));
+  const inferred = inferMonodMuUnit(input.equations, sanitizedVariables, sanitizedParameters, sanitizedRaw);
+  const recomputedReport = analyzeReproducibility(
+    input.equations,
+    inferred.variables,
+    sanitizedParameters,
+    [...input.assumptionItems, ...input.limitationItems],
+    inferred.raw,
+    input.systemDescription ?? "",
+    input.problemStatement ?? "",
+    input.pythonCode,
+  );
+  const recomputedUnitReport = runUnitCheck(input.equations, inferred.variables, sanitizedParameters, inferred.raw);
+  const cleanInput: ModelPackageInput = {
+    ...input,
+    variables: inferred.variables,
+    parameters: sanitizedParameters,
+    raw: inferred.raw,
+    report: recomputedReport,
+    unitReport: recomputedUnitReport,
+  };
+  const { equations, variables, parameters, assumptionItems, limitationItems, raw, report, assemblyReport, unitReport, pythonCode } = cleanInput;
+  let chemEBrainReport: ChemEBrainReport;
+  try {
+    chemEBrainReport = analyzeChemEModel(buildChemEBrainInput(cleanInput));
+  } catch {
+    chemEBrainReport = {
+      canonical_model_type: "unknown",
+      confidence: "low",
+      confidence_explanation: { matchedEquations: [], matchedParameters: [], matchedKeywords: [], matchedTemplateRequirements: [] },
+      simulation_support: { status: "not_ready", reason: "ChemE Brain analysis failed during export generation." },
+      missing_requirements: [],
+      available_from_current_source: [],
+      role_assignment_warnings: [],
+    } as unknown as ChemEBrainReport;
+  }
+  const assemblyComparison = compareAssemblyWithChemEBrain(
+    assemblyReport as AssemblyReportLike | null | undefined,
+    chemEBrainReport,
+  );
 
   const files: Record<string, string> = {};
 
-  files["README.md"]                   = makeReadme(input);
-  files["model_card.md"]               = makeModelCard(input);
+  files["README.md"]                   = makeReadme(cleanInput, chemEBrainReport);
+  files["model_card.md"]               = makeModelCard(cleanInput);
   files["variables.csv"]               = makeVariablesCsv(variables);
   files["parameters.csv"]              = makeParametersCsv(parameters);
   files["equations.md"]                = makeEquationsMd(equations, raw);
   files["assumptions.md"]              = makeAssumptionsMd(assumptionItems);
   files["limitations.md"]              = makeLimitationsMd(limitationItems);
   files["missing_information.md"]      = makeMissingInfoMd(report);
+  files["cheme_brain_report.json"]     = JSON.stringify({ ...chemEBrainReport, assembly_comparison: assemblyComparison }, null, 2);
+  files["cheme_brain_report.md"]       = makeChemEBrainReportMd(chemEBrainReport, assemblyComparison);
   if (assemblyReport) {
     files["model_assembly_report.json"] = JSON.stringify(assemblyReport, null, 2);
     files["missing_requirements.md"]    = makeAssemblyMissingRequirementsMd(assemblyReport);
@@ -753,11 +1211,11 @@ export function generateModelPackage(
     : '{\n  "_note": "No raw extraction JSON available for this record."\n}';
   files["simulate.py"]                 = pythonCode;
   files["model_notebook.ipynb"]        = generateJupyterNotebook({
-    title: input.title,
-    projectName: input.projectName,
-    providerUsed: input.providerUsed,
-    systemType: input.systemType,
-    systemDescription: input.systemDescription ?? null,
+    title: cleanInput.title,
+    projectName: cleanInput.projectName,
+    providerUsed: cleanInput.providerUsed,
+    systemType: cleanInput.systemType,
+    systemDescription: cleanInput.systemDescription ?? null,
     equations,
     variables,
     parameters,

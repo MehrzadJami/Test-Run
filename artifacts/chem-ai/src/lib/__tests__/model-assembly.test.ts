@@ -237,6 +237,14 @@ function monodChemostatInput(): ModelAssemblyInput {
         role: "state",
         sourceQuote: "Substrate balance: dS/dt = D*(Sin - S) - (1/Yxs)*mu*X.",
       },
+      {
+        id: 3,
+        symbol: "mu",
+        name: "specific growth rate",
+        unit: "1/h",
+        role: "output",
+        sourceQuote: "The growth rate is mu = mumax*S/(Ks+S).",
+      },
     ],
     parameters: [
       {
@@ -279,6 +287,26 @@ function monodChemostatInput(): ModelAssemblyInput {
         confidence: "high",
         sourceQuote: "Yxs = 0.5 g/g.",
       },
+      {
+        id: 6,
+        symbol: "X0",
+        name: "Initial condition for X",
+        value: 0.1,
+        unit: "g/L",
+        confidence: "high",
+        sourceQuote: "Initial conditions are X0 = 0.1 g/L and S0 = 5 g/L. [initial_condition]",
+        originalValue: { kind: "initial_condition", status: "initial_condition" },
+      },
+      {
+        id: 7,
+        symbol: "S0",
+        name: "Initial condition for S",
+        value: 5,
+        unit: "g/L",
+        confidence: "high",
+        sourceQuote: "Initial conditions are X0 = 0.1 g/L and S0 = 5 g/L. [initial_condition]",
+        originalValue: { kind: "initial_condition", status: "initial_condition" },
+      },
     ],
     equations: [
       {
@@ -313,9 +341,31 @@ function monodChemostatInput(): ModelAssemblyInput {
         inputs: ["Sin"],
         outputs: ["X", "S", "mu"],
         control_variables: ["D"],
-        missing_information: ["Initial conditions were not specified."],
+        missing_information: [],
         can_generate_ode_template: true,
       },
+      initial_conditions: [
+        {
+          symbol: "X0",
+          state_symbol: "X",
+          name: "Initial condition for X",
+          value: "0.1",
+          value_numeric: 0.1,
+          unit: "g/L",
+          source_context: "Initial conditions are X0 = 0.1 g/L and S0 = 5 g/L.",
+          confidence: "high",
+        },
+        {
+          symbol: "S0",
+          state_symbol: "S",
+          name: "Initial condition for S",
+          value: "5",
+          value_numeric: 5,
+          unit: "g/L",
+          source_context: "Initial conditions are X0 = 0.1 g/L and S0 = 5 g/L.",
+          confidence: "high",
+        },
+      ],
     },
   };
 }
@@ -429,12 +479,132 @@ describe("analyzeModelAssembly", () => {
     ).length;
 
     expect(monodReport.target_model_type).toBe("monod_chemostat");
-    expect(monodReport.assembly_status).toBe("partial");
+    expect(monodReport.assembly_status).toBe("complete");
     expect(monodReport.assembly_status).not.toBe("insufficient");
+    expect(monodReport.can_generate_runnable_model).toBe(true);
     expect(monodReport.can_generate_scaffold).toBe(true);
     expect(monodCritical).toBeLessThan(abiusiCritical);
-    expect(monodReport.missing_requirements.map((item) => item.item)).toEqual([
+    expect(monodReport.missing_requirements.map((item) => item.item)).not.toContain(
       "Initial conditions",
-    ]);
+    );
+    expect(monodReport.available_from_current_source.map((item) => item.item)).toContain(
+      "Initial condition for X",
+    );
+    expect(monodReport.available_from_current_source.map((item) => item.item)).not.toContain(
+      "Reactor volume",
+    );
+    expect(monodReport.available_from_current_source).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ item: "Variable mu", type: "output" }),
+      ]),
+    );
+  });
+
+  it("keeps Monod scaffold-only when any required runnable item is missing", () => {
+    const input = monodChemostatInput();
+    input.parameters = input.parameters.filter((parameter) => parameter.symbol !== "Yxs");
+    if (input.raw?.parameters) {
+      input.raw.parameters = input.raw.parameters.filter((parameter) => parameter.symbol !== "Yxs");
+    }
+
+    const report = analyzeModelAssembly(input);
+
+    expect(report.target_model_type).toBe("monod_chemostat");
+    expect(report.assembly_status).toBe("partial");
+    expect(report.can_generate_runnable_model).toBe(false);
+    expect(report.can_generate_scaffold).toBe(true);
+    expect(report.missing_requirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ item: "Monod parameter Yxs" }),
+      ]),
+    );
+  });
+
+  it("keeps gas-transfer parameters out of controls unless explicitly manipulated", () => {
+    const report = analyzeModelAssembly({
+      systemDescription: "Aerobic gas-liquid oxygen-transfer model.",
+      problemStatement: "Track dissolved oxygen in an aerobic bioreactor.",
+      variables: [
+        {
+          id: 1,
+          symbol: "C_O2",
+          name: "dissolved oxygen concentration",
+          unit: "g/L",
+          role: "state",
+          sourceQuote: "dC_O2/dt = kLa*(Cstar_O2 - C_O2) - qO2*X.",
+        },
+        {
+          id: 2,
+          symbol: "X",
+          name: "biomass concentration",
+          unit: "unknown",
+          role: "input",
+          sourceQuote: "dC_O2/dt = kLa*(Cstar_O2 - C_O2) - qO2*X.",
+        },
+      ],
+      parameters: [
+        {
+          id: 1,
+          symbol: "kLa",
+          value: 80,
+          unit: "1/h",
+          confidence: "high",
+          sourceQuote: "Parameters are kLa = 80 1/h, Cstar_O2 = 0.008 g/L, and qO2 = 0.02 gO2/gX/h.",
+        },
+        {
+          id: 2,
+          symbol: "Cstar_O2",
+          value: 0.008,
+          unit: "g/L",
+          confidence: "high",
+          sourceQuote: "Parameters are kLa = 80 1/h, Cstar_O2 = 0.008 g/L, and qO2 = 0.02 gO2/gX/h.",
+        },
+        {
+          id: 3,
+          symbol: "qO2",
+          value: 0.02,
+          unit: "gO2/gX/h",
+          confidence: "high",
+          sourceQuote: "Parameters are kLa = 80 1/h, Cstar_O2 = 0.008 g/L, and qO2 = 0.02 gO2/gX/h.",
+        },
+      ],
+      equations: [
+        {
+          id: 1,
+          latex: "dC_O2/dt = kLa*(Cstar_O2 - C_O2) - qO2*X",
+          description: "Oxygen balance",
+          sourceQuote: "The oxygen balance is dC_O2/dt = kLa*(Cstar_O2 - C_O2) - qO2*X.",
+        },
+      ],
+      assumptions: [
+        { id: 1, text: "Henry-law convention was not specified.", kind: "limitation" },
+      ],
+      raw: {
+        model_type: "gas_liquid",
+        model_card: {
+          inputs: ["X"],
+          outputs: ["C_O2"],
+          control_variables: [],
+          missing_information: ["Henry-law convention was not specified."],
+          can_generate_ode_template: true,
+        },
+      },
+    });
+
+    const available = report.available_from_current_source;
+    expect(report.target_model_type).toBe("gas_liquid");
+    expect(available).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ item: "kLa = 80 1/h", type: "parameter" }),
+      ]),
+    );
+    expect(available).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ item: "kLa = 80 1/h", type: "control" }),
+      ]),
+    );
+    expect(report.missing_requirements.map((item) => item.item)).toEqual(
+      expect.arrayContaining(["Henry-law convention", "Initial conditions"]),
+    );
   });
 });

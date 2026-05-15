@@ -216,6 +216,19 @@ describe("matchTemplates — gas–liquid transfer", () => {
     expect(r.totalEquations).toBe(1);
   });
 
+  it("does not count explicit stoichiometric equations as runnable ODEs", () => {
+    const eqs = [
+      {
+        ...mkEq("CH3COOH + 2 O2 -> 2 CO2 + 2 H2O"),
+        equationType: "stoichiometric_reaction",
+      },
+    ];
+    const r = matchTemplates(eqs, [], []);
+    expect(r.totalEquations).toBe(0);
+    expect(r.derivatives).toHaveLength(0);
+    expect(r.matched).toHaveLength(0);
+  });
+
   it("flags kLa missing from tables", () => {
     const eqs = [mkEq("dO/dt = kLa*(Cstar - O)")];
     const vars = [mkVar("O")];
@@ -248,6 +261,31 @@ describe("matchTemplates — full chemostat model", () => {
     expect(r.matched.length).toBe(1);      // Monod
     expect(r.derivatives.length).toBe(2);  // dX/dt and dS/dt
     expect(r.unmatched.length).toBe(0);
+  });
+
+  it("matches Monod growth even when the equation is explicitly algebraic", () => {
+    const r = matchTemplates(
+      [{ ...mkEq("mu = mumax * S / (Ks + S)"), equationType: "algebraic_calculation" }],
+      chemostatVars(),
+      chemostatParams(),
+    );
+
+    expect(r.matched).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ templateName: "monod_kinetics", pythonCode: "mu = mumax * S / (Ks + S)" }),
+      ]),
+    );
+    expect(r.runnableCount).toBe(1);
+    expect(r.totalEquations).toBe(1);
+  });
+
+  it("never substitutes an unknown placeholder state into the substrate ODE", () => {
+    const vars = [mkVar("unknown"), ...chemostatVars()];
+    const r = matchTemplates(fullChemostat, vars, chemostatParams());
+    const substrate = r.derivatives.find((item) => item.stateSym === "S");
+
+    expect(substrate?.pythonLine).toBe("dSdt = D * (Sin - S) - (1.0 / Yxs) * mu * X");
+    expect(substrate?.pythonLine).not.toMatch(/unknown/i);
   });
 
   it("runnableCount equals total matched when all present", () => {

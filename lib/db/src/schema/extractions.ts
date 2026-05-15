@@ -21,7 +21,7 @@ export const extractionsTable = pgTable("extractions", {
     () => sourceDocumentsTable.id,
     { onDelete: "set null" },
   ),
-  providerUsed: text("provider_used", { enum: ["mock", "openai", "gemini", "ollama", "rule_based"] })
+  providerUsed: text("provider_used", { enum: ["mock", "openai", "gemini", "groq", "ollama", "rule_based"] })
     .notNull()
     .default("mock"),
   status: text("status", { enum: ["pending", "ready", "failed"] })

@@ -25,6 +25,19 @@ export const equationsTable = pgTable("equations", {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
+  equationType: text("equation_type", {
+    enum: [
+      "dynamic_ode",
+      "algebraic_calculation",
+      "stoichiometric_reaction",
+      "empirical_correlation",
+      "reported_experimental_result",
+      "control_law",
+      "unknown",
+    ],
+  })
+    .notNull()
+    .default("unknown"),
   confidence: text("confidence", { enum: ["high", "medium", "low"] })
     .notNull()
     .default("medium"),

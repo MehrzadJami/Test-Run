@@ -20,7 +20,7 @@ export const variablesTable = pgTable("variables", {
   name: text("name").notNull().default(""),
   meaning: text("meaning").notNull().default(""),
   unit: text("unit").notNull().default(""),
-  role: text("role", { enum: ["state", "input", "output"] })
+  role: text("role", { enum: ["state", "input", "output", "parameter", "control"] })
     .notNull()
     .default("state"),
   confidence: text("confidence", { enum: ["high", "medium", "low"] })

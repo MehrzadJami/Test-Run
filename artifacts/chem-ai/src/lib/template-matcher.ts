@@ -27,6 +27,8 @@
 
 import { normalizeEqText } from "./dimensional-analysis";
 import type { AnalysisEquation, AnalysisVariable, AnalysisParameter } from "./reproducibility";
+import { hasKnownParameterValue } from "./parameter-values";
+import { isExplicitlyNonDynamicEquation } from "./equation-types";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -85,12 +87,18 @@ interface SymInfo {
 
 type SymLookup = Map<string, SymInfo>;
 
+function isPlaceholderSymbol(symbol: string | null | undefined): boolean {
+  const text = String(symbol ?? "").trim().toLowerCase();
+  return text === "" || text === "-" || text === "unknown" || text === "n/a";
+}
+
 function buildSymLookup(
   variables: AnalysisVariable[],
   parameters: AnalysisParameter[],
 ): SymLookup {
   const map: SymLookup = new Map();
   for (const v of variables) {
+    if (isPlaceholderSymbol(v.symbol)) continue;
     map.set(v.symbol.toLowerCase(), {
       original: v.symbol,
       isStateVar: v.role === "state",
@@ -98,13 +106,13 @@ function buildSymLookup(
     });
   }
   for (const p of parameters) {
+    if (isPlaceholderSymbol(p.symbol)) continue;
     const lower = p.symbol.toLowerCase();
     if (!map.has(lower)) {
-      const n = Number(p.value);
       map.set(lower, {
         original: p.symbol,
         isStateVar: false,
-        hasNumericValue: p.value !== null && p.value !== undefined && !isNaN(n),
+        hasNumericValue: hasKnownParameterValue(p),
       });
     }
   }
@@ -247,10 +255,10 @@ function trySubstrateOde(
   const sinLow = sinM ? sinM[1] : null;
 
   // Find the biomass state variable (the "other" state variable that isn't the substrate)
-  const stateVars = variables.filter((v) => v.role === "state");
-  const otherStateVar = stateVars.find(
-    (v) => v.symbol.toLowerCase() !== stateLow,
-  );
+  const stateVars = variables.filter((v) => v.role === "state" && !isPlaceholderSymbol(v.symbol));
+  const otherStateVar =
+    stateVars.find((v) => v.symbol.toLowerCase() === "x" && v.symbol.toLowerCase() !== stateLow) ??
+    stateVars.find((v) => v.symbol.toLowerCase() !== stateLow);
   const bioLow = otherStateVar?.symbol.toLowerCase() ?? null;
 
   // Find growth rate symbol used in the equation (mu)
@@ -341,13 +349,53 @@ function tryGasLiquidTransfer(
     if (lookup.has(candidate)) { klaLow = candidate; break; }
   }
 
-  // Pattern: dC/dt = kLa * (Cstar - C)  or  OTR = kLa * (Cstar - C)
-  const odeM = norm.match(
-    /d([a-z_]\w*)\/dt\s*=\s*([a-z_]\w*)\s*\*\s*\(\s*([a-z_]\w*)\s*-\s*\1\s*\)/,
+  // Pattern A (full oxygen balance): dC/dt = kLa*(Cstar - C) - qO2*X [- D*C]
+  // Correct form: transfer - consumption [- dilution]
+  const fullOdeM = norm.match(
+    /d([a-z_]\w*)\/dt\s*=\s*([a-z_]\w*)\s*\*\s*\(\s*([a-z_]\w*)\s*-\s*\1\s*\)\s*-\s*([a-z_]\w*)\s*\*\s*([a-z_]\w*)((?:\s*-\s*[a-z_]\w*\s*\*\s*\1)?)/,
   );
-  const algM = !odeM
+
+  // Pattern B (simple transfer only): dC/dt = kLa*(Cstar - C)
+  const odeM = !fullOdeM
+    ? norm.match(/d([a-z_]\w*)\/dt\s*=\s*([a-z_]\w*)\s*\*\s*\(\s*([a-z_]\w*)\s*-\s*\1\s*\)/)
+    : null;
+
+  const algM = !fullOdeM && !odeM
     ? norm.match(/^([a-z_]\w*)\s*=\s*([a-z_]\w*)\s*\*\s*\(\s*([a-z_]\w*)\s*-\s*([a-z_]\w*)\s*\)/)
     : null;
+
+  if (fullOdeM) {
+    const [, stateLow, klaToken, cstarLow, coeff1Low, coeff2Low, dilutionPart] = fullOdeM;
+    const klaKey = klaLow ?? klaToken;
+    const required = [stateLow, klaKey, cstarLow, coeff1Low, coeff2Low];
+    const miss = missing(required, lookup);
+
+    const state = orig(stateLow, lookup);
+    const kla = orig(klaKey, lookup);
+    const cstar = orig(cstarLow, lookup);
+    const coeff1 = orig(coeff1Low, lookup);
+    const coeff2 = orig(coeff2Low, lookup);
+
+    let pythonRhs = `${kla} * (${cstar} - ${state}) - ${coeff1} * ${coeff2}`;
+    // Include dilution term if present: - D * C
+    if (dilutionPart) {
+      const dilM = dilutionPart.trim().match(/-\s*([a-z_]\w*)\s*\*\s*([a-z_]\w*)/);
+      if (dilM) {
+        const dSym = orig(dilM[1], lookup);
+        pythonRhs += ` - ${dSym} * ${state}`;
+      }
+    }
+
+    return {
+      stateSym: state,
+      derivName: `d${state}dt`,
+      pythonLine: miss.length === 0 ? `d${state}dt = ${pythonRhs}` : null,
+      comment: original,
+      templateLabel: "Gas–liquid O₂ transfer ODE (with consumption)",
+      missingSymbols: miss,
+      isRunnable: miss.length === 0,
+    } satisfies DerivativePart;
+  }
 
   if (odeM) {
     const [, stateLow, klaToken, cstarLow] = odeM;
@@ -427,12 +475,15 @@ export function matchTemplates(
 
     // ── Try templates in priority order ──────────────────────────────────────
 
-    // Monod (intermediate, non-ODE)
+    // Monod (intermediate, non-ODE). Keep this even when the equation type is
+    // explicitly algebraic, because the Python ODE needs mu before derivatives.
     const monod = tryMonodKinetics(norm, text, lookup);
     if (monod) {
       matched.push(monod);
       continue;
     }
+
+    if (isExplicitlyNonDynamicEquation(eq)) continue;
 
     // Biomass ODE
     const biomass = tryBiomassOde(norm, text, lookup);
@@ -509,8 +560,6 @@ export function matchTemplates(
     derivatives,
     unmatched,
     runnableCount,
-    totalEquations: equations.filter(
-      (e) => (e.latex?.trim() || e.description?.trim()),
-    ).length,
+    totalEquations: totalMatched + unmatched.length,
   };
 }

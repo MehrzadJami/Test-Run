@@ -19,7 +19,11 @@ export const parametersTable = pgTable("parameters", {
   ordinal: integer("ordinal").notNull().default(0),
   symbol: text("symbol").notNull(),
   name: text("name").notNull().default(""),
+  // Deprecated numeric compatibility column. New code should prefer
+  // valueNumeric/valueRaw so non-numeric scientific values are not coerced to 0.
   value: doublePrecision("value").notNull(),
+  valueRaw: text("value_raw").notNull().default(""),
+  valueNumeric: doublePrecision("value_numeric"),
   unit: text("unit").notNull().default(""),
   confidence: text("confidence", { enum: ["high", "medium", "low"] })
     .notNull()

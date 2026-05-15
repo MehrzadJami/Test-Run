@@ -13,4 +13,6 @@ export interface AddSourceDocumentInput {
   filename?: string | null;
   /** @minLength 1 */
   content: string;
+  /** @nullable */
+  structuredDocument?: { [key: string]: unknown } | null;
 }

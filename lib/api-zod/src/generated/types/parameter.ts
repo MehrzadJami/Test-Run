@@ -15,6 +15,9 @@ export interface Parameter {
   /** Full descriptive name of the parameter. */
   name: string;
   value: number;
+  valueRaw: string;
+  /** @nullable */
+  valueNumeric: number | null;
   unit: string;
   confidence: ParameterConfidence;
   sourceQuote: string;

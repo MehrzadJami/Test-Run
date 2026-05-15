@@ -641,6 +641,16 @@ components:
         charCount:
           type: integer
           description: Character count of extracted text.
+        fallback_required:
+          type: boolean
+        message:
+          type: ["string", "null"]
+        diagnostics:
+          type: object
+          additionalProperties: true
+        structuredDocument:
+          type: object
+          additionalProperties: true
       required: [text, pageCount, wordCount, charCount]
 
     HealthStatus:
@@ -799,10 +809,13 @@ components:
           type: ["string", "null"]
         content:
           type: string
+        structuredDocument:
+          type: ["object", "null"]
+          additionalProperties: true
         createdAt:
           type: string
           format: date-time
-      required: [id, projectId, kind, filename, content, createdAt]
+      required: [id, projectId, kind, filename, content, structuredDocument, createdAt]
 
     AddSourceDocumentInput:
       type: object
@@ -815,6 +828,9 @@ components:
         content:
           type: string
           minLength: 1
+        structuredDocument:
+          type: ["object", "null"]
+          additionalProperties: true
       required: [kind, content]
 
     CreateExtractionInput:
@@ -825,11 +841,13 @@ components:
           description: Optional — if omitted, uses the most recent source document for the project.
         provider:
           type: string
-          enum: [mock, openai, gemini, auto]
+          enum: [mock, openai, gemini, groq, ollama, rule_based, auto]
           description: >-
             AI provider to use for extraction. "auto" (default) uses the
-            fallback chain: OpenAI → Gemini → Mock depending on which keys
-            are configured. "mock" always uses deterministic mock output.
+            fallback chain: OpenAI → Gemini → Groq → Ollama → Rule-based
+            depending on which providers are configured. "rule_based" uses
+            deterministic local extraction. "mock" always uses fixed demo
+            output.
 
     Equation:
       type: object
@@ -855,6 +873,17 @@ components:
           items:
             type: string
           description: Symbols appearing in this equation.
+        equationType:
+          type: string
+          enum:
+            - dynamic_ode
+            - algebraic_calculation
+            - stoichiometric_reaction
+            - empirical_correlation
+            - reported_experimental_result
+            - control_law
+            - unknown
+          description: Scientific equation semantics; only dynamic_ode is runnable ODE content.
         confidence:
           type: string
           enum: [high, medium, low]
@@ -870,7 +899,7 @@ components:
           type: ["object", "null"]
           additionalProperties: true
           description: Snapshot of the row before the first human edit. Null if unedited.
-      required: [id, ordinal, label, latex, plaintext, meaning, variablesInvolved, confidence, description, sourceQuote, editedByUser]
+      required: [id, ordinal, label, latex, plaintext, meaning, variablesInvolved, equationType, confidence, description, sourceQuote, editedByUser]
 
     Variable:
       type: object
@@ -890,7 +919,7 @@ components:
           type: string
         role:
           type: string
-          enum: [state, input, output]
+          enum: [state, input, output, parameter, control]
         confidence:
           type: string
           enum: [high, medium, low]
@@ -917,6 +946,13 @@ components:
           description: Full descriptive name of the parameter.
         value:
           type: number
+          description: Deprecated numeric compatibility value. Prefer valueNumeric/valueRaw.
+        valueRaw:
+          type: string
+          description: Raw provider value as extracted from the source, e.g. "0.8 1/h" or "unknown".
+        valueNumeric:
+          type: ["number", "null"]
+          description: Parsed numeric value. Null when the provider value is unknown or non-numeric.
         unit:
           type: string
         confidence:
@@ -929,7 +965,7 @@ components:
         originalValue:
           type: ["object", "null"]
           additionalProperties: true
-      required: [id, ordinal, symbol, name, value, unit, confidence, sourceQuote, editedByUser]
+      required: [id, ordinal, symbol, name, value, valueRaw, valueNumeric, unit, confidence, sourceQuote, editedByUser]
 
     Assumption:
       type: object
@@ -970,7 +1006,7 @@ components:
           type: string
         role:
           type: string
-          enum: [state, input, output]
+          enum: [state, input, output, parameter, control]
         confidence:
           type: string
           enum: [high, medium, low]
@@ -1046,7 +1082,7 @@ components:
           type: ["integer", "null"]
         providerUsed:
           type: string
-          enum: [mock, openai, gemini]
+          enum: [mock, openai, gemini, groq, ollama, rule_based]
         status:
           type: string
           enum: [pending, ready, failed]
@@ -1085,7 +1121,7 @@ components:
               type: ["integer", "null"]
             providerUsed:
               type: string
-              enum: [mock, openai, gemini]
+              enum: [mock, openai, gemini, groq, ollama, rule_based]
             status:
               type: string
               enum: [pending, ready, failed]

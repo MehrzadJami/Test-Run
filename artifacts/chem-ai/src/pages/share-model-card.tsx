@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/tabs";
 import { AlertCircle, ExternalLink, Loader2 } from "lucide-react";
 import { useAuth } from "@workspace/replit-auth-web";
+import { getParameterDisplayValue } from "@/lib/parameter-values";
 
 export default function ShareModelCard() {
   const params = useParams<{ id: string }>();
@@ -209,7 +210,7 @@ export default function ShareModelCard() {
                           <tr key={p.id} className="border-b border-border/50 last:border-0">
                             <td className="py-2 pr-4 font-mono text-primary">{p.symbol}</td>
                             <td className="py-2 pr-4">{p.name}</td>
-                            <td className="py-2 pr-4 font-mono text-xs">{p.value}</td>
+                            <td className="py-2 pr-4 font-mono text-xs">{getParameterDisplayValue(p)}</td>
                             <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{p.unit || "—"}</td>
                             <td className="py-2">
                               <Badge variant="outline" className={`text-[10px] ${p.confidence === "high" ? "text-emerald-600 border-emerald-400" : p.confidence === "medium" ? "text-amber-600 border-amber-400" : "text-red-600 border-red-400"}`}>

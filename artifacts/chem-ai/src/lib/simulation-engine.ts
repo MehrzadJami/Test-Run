@@ -15,6 +15,15 @@ export interface SimulationPoint extends OdeState {
   t: number;
 }
 
+export interface SimulationResult {
+  points: SimulationPoint[];
+  /** True when at least one state went negative and was clamped to 0.
+   *  Indicates the step size may be too large or the ODE formulation has an error. */
+  clampedNegative: boolean;
+  /** Names of state variables that were clamped at least once. */
+  clampedSymbols: string[];
+}
+
 export interface MonodChemostatParams extends OdeParams {
   mumax: number;
   Ks: number;
@@ -29,11 +38,11 @@ export interface BatchCultureParams extends OdeParams {
   Yxs: number;
 }
 
-export function rk4(ode: OdeFunction, options: Rk4Options): SimulationPoint[] {
+export function rk4(ode: OdeFunction, options: Rk4Options): SimulationResult {
   const stateKeys = Object.keys(options.initialState);
   const maxSteps = options.maxSteps ?? 50_000;
   const steps = Math.min(Math.ceil(options.tFinal / options.dt), maxSteps);
-  if (steps <= 0 || !Number.isFinite(steps)) return [];
+  if (steps <= 0 || !Number.isFinite(steps)) return { points: [], clampedNegative: false, clampedSymbols: [] };
 
   const h = options.tFinal / steps;
   const decimation = Math.max(
@@ -41,6 +50,7 @@ export function rk4(ode: OdeFunction, options: Rk4Options): SimulationPoint[] {
     Math.floor(steps / (options.maxOutputPoints ?? 1_000)),
   );
   const points: SimulationPoint[] = [];
+  const clampedSymbolSet = new Set<string>();
 
   let state = { ...options.initialState };
   let t = 0;
@@ -48,7 +58,9 @@ export function rk4(ode: OdeFunction, options: Rk4Options): SimulationPoint[] {
   const sample = () => {
     const point: SimulationPoint = { t: Number(t.toFixed(4)) };
     for (const key of stateKeys) {
-      point[key] = Number(Math.max(0, state[key] ?? 0).toFixed(6));
+      const raw = state[key] ?? 0;
+      if (raw < 0) clampedSymbolSet.add(key);
+      point[key] = Number(Math.max(0, raw).toFixed(6));
     }
     points.push(point);
   };
@@ -82,7 +94,11 @@ export function rk4(ode: OdeFunction, options: Rk4Options): SimulationPoint[] {
     t += h;
   }
 
-  return points;
+  return {
+    points,
+    clampedNegative: clampedSymbolSet.size > 0,
+    clampedSymbols: [...clampedSymbolSet],
+  };
 }
 
 export function monodChemostatODE(

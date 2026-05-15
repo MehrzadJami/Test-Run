@@ -15,13 +15,18 @@ import type {
   RawExtraction,
 } from "./reproducibility";
 import { normalizeModelType, type ModelType } from "@workspace/domain-classifier";
+import { getParameterDisplayValue } from "./parameter-values";
 
 export type AssemblyStatus = "complete" | "partial" | "insufficient";
 export type AssemblyItemType =
   | "equation"
   | "parameter"
   | "state"
+  | "input"
+  | "output"
   | "control"
+  | "initial_condition"
+  | "limitation"
   | "assumption";
 export type AssemblyConfidence = "high" | "medium" | "low";
 
@@ -136,7 +141,7 @@ function isPlaceholder(value: unknown): boolean {
 }
 
 function parameterLabel(parameter: AnalysisParameter): string {
-  const value = safe(parameter.value);
+  const value = getParameterDisplayValue(parameter);
   const unit = safe(parameter.unit);
   if (!isPlaceholder(value) && !isPlaceholder(unit)) {
     return `${parameter.symbol} = ${value} ${unit}`;
@@ -200,13 +205,25 @@ function rawTextParts(raw: RawExtraction | null | undefined): string[] {
       variable.name,
       variable.role,
       variable.source_context,
+      variable.initial_condition?.symbol,
+      variable.initial_condition?.value,
+      variable.initial_condition?.unit,
     ]),
     ...(raw.parameters ?? []).flatMap((parameter) => [
       parameter.symbol,
       parameter.name,
       parameter.value,
       parameter.unit,
+      parameter.status,
       parameter.source_context,
+    ]),
+    ...(raw.initial_conditions ?? []).flatMap((initialCondition) => [
+      initialCondition.symbol,
+      initialCondition.state_symbol,
+      initialCondition.name,
+      initialCondition.value,
+      initialCondition.unit,
+      initialCondition.source_context,
     ]),
     ...(raw.assumptions ?? []).flatMap((assumption) => [
       assumption.assumption,
@@ -237,7 +254,7 @@ function buildTextParts(input: ModelAssemblyInput): string[] {
     ]),
     ...input.parameters.flatMap((parameter) => [
       parameter.symbol,
-      parameter.value,
+      getParameterDisplayValue(parameter),
       parameter.unit,
       parameter.sourceQuote,
     ]),
@@ -279,8 +296,20 @@ function detectTargetModelType(input: ModelAssemblyInput, corpus: string): Model
   if (hasOxygenBalance && hasAcetate && hasPhoto && hasMixotrophy) {
     return "oxygen_balanced_mixotrophy";
   }
-  if (hasPhoto) return "microalgae_photobioreactor";
-  if (/\bkla\b|\bhenry\b|\bgas[- ]?liquid\b|\bo2\b|\bco2\b/.test(corpus)) {
+  // Haldane/Andrews substrate inhibition: applies to any reactor type,
+  // NOT exclusively photobioreactors — resolve to photo only when photo signals coexist.
+  const hasHaldane = /\bhaldane\b|\bandrews\b|\bsubstrate inhibition\b/.test(corpus);
+  if (hasPhoto && !hasHaldane) return "microalgae_photobioreactor";
+  if (hasPhoto && hasHaldane) {
+    // Haldane mentioned alongside photo context: still photobioreactor (Haldane grows in PBR too),
+    // but if chemostat signals exist prefer monod_chemostat so the user gets the closer scaffold.
+    if (!/\bchemostat\b|\bcontinuous\b|\bdilution rate\b/.test(corpus)) {
+      return "microalgae_photobioreactor";
+    }
+    // fall through to chemostat detection below
+  }
+  // C1.18: OUR / OTR / qO2 are oxygen-transfer signals → classify as gas_liquid
+  if (/\bkla\b|\bk_la\b|\bhenry\b|\bgas[- ]?liquid\b|\bo2\b|\bco2\b|\bour\b|\botr\b|\bqo2\b/.test(corpus)) {
     return "gas_liquid";
   }
   if (hasAcetate || hasMixotrophy) {
@@ -321,7 +350,7 @@ function hasState(input: ModelAssemblyInput, patterns: RegExp[]): boolean {
 function hasParameter(input: ModelAssemblyInput, patterns: RegExp[]): boolean {
   const rows = [
     ...input.parameters.map((parameter) =>
-      `${parameter.symbol} ${symbolText(parameter.symbol)} ${parameter.value ?? ""} ${parameter.unit ?? ""} ${parameter.sourceQuote}`,
+      `${parameter.symbol} ${symbolText(parameter.symbol)} ${getParameterDisplayValue(parameter)} ${parameter.unit ?? ""} ${parameter.sourceQuote}`,
     ),
     ...(input.raw?.parameters ?? []).map((parameter) =>
       `${parameter.symbol ?? ""} ${symbolText(parameter.symbol ?? "")} ${parameter.value ?? ""} ${parameter.unit ?? ""} ${parameter.source_context ?? ""}`,
@@ -342,7 +371,76 @@ function hasEquation(input: ModelAssemblyInput, patterns: RegExp[]): boolean {
   return rows.some((row) => hasAny(lower(row), patterns));
 }
 
+function stateSymbols(input: ModelAssemblyInput): Set<string> {
+  const stateSymbols = new Set<string>();
+  for (const variable of input.variables) {
+    if (lower(variable.role) === "state" && safe(variable.symbol) && !isPlaceholder(variable.symbol)) {
+      stateSymbols.add(symbolText(variable.symbol));
+    }
+  }
+  for (const variable of input.raw?.state_variables ?? []) {
+    if (lower(variable.role) === "state" && safe(variable.symbol) && !isPlaceholder(variable.symbol)) {
+      stateSymbols.add(symbolText(variable.symbol ?? ""));
+    }
+  }
+  return stateSymbols;
+}
+
+function initialConditionStates(input: ModelAssemblyInput): Set<string> {
+  const initialStates = new Set<string>();
+  const addStateFromInitialSymbol = (symbol: unknown): void => {
+    const match = safe(symbol).match(/^([A-Za-z][A-Za-z0-9_]*?)(?:0|_0)$/);
+    if (match?.[1]) initialStates.add(symbolText(match[1]));
+  };
+
+  for (const initialCondition of input.raw?.initial_conditions ?? []) {
+    if (safe(initialCondition.state_symbol)) {
+      initialStates.add(symbolText(initialCondition.state_symbol ?? ""));
+    } else {
+      addStateFromInitialSymbol(initialCondition.symbol);
+    }
+  }
+  for (const variable of input.raw?.state_variables ?? []) {
+    const initialCondition = variable.initial_condition;
+    if (!initialCondition) continue;
+    if (safe(variable.symbol)) initialStates.add(symbolText(variable.symbol ?? ""));
+    if (safe(initialCondition.symbol)) addStateFromInitialSymbol(initialCondition.symbol);
+  }
+  for (const variable of input.variables) {
+    const original = variable.originalValue as
+      | { initial_condition?: { symbol?: string; kind?: string } }
+      | null
+      | undefined;
+    if (original?.initial_condition) {
+      initialStates.add(symbolText(variable.symbol));
+      addStateFromInitialSymbol(original.initial_condition.symbol);
+    }
+  }
+  for (const parameter of input.parameters) {
+    const original = parameter.originalValue as { kind?: string; status?: string } | null | undefined;
+    const name = lower(parameter.name);
+    const sourceQuote = lower(parameter.sourceQuote);
+    const isInitialCondition =
+      original?.kind === "initial_condition" ||
+      original?.status === "initial_condition" ||
+      name.includes("initial condition") ||
+      sourceQuote.includes("[initial_condition]") ||
+      /(^|_)(x0|s0|c0|do0)$/i.test(parameter.symbol);
+    if (isInitialCondition) addStateFromInitialSymbol(parameter.symbol);
+  }
+  return initialStates;
+}
+
 function hasInitialConditions(input: ModelAssemblyInput, corpus: string): boolean {
+  const states = stateSymbols(input);
+  if (states.size === 0) {
+    return /\binitial\b|\bat\s+t\s*=\s*0\b|\binoculum\b/.test(corpus);
+  }
+  const initialStates = initialConditionStates(input);
+  const allStateInitialsPresent = [...states].every((state) => initialStates.has(state));
+  if (allStateInitialsPresent) return true;
+  if (initialStates.size > 0) return false;
+
   if (/\binitial conditions?\b/.test(missingInfoCorpus(input))) {
     return false;
   }
@@ -350,7 +448,7 @@ function hasInitialConditions(input: ModelAssemblyInput, corpus: string): boolea
     return false;
   }
   if (/\binitial\b|\bat\s+t\s*=\s*0\b|\binoculum\b/.test(corpus)) return true;
-  return input.parameters.some((parameter) => /(^|_)(x0|s0|c0|do0|ic)$/i.test(parameter.symbol));
+  return false;
 }
 
 function hasControllerParameters(input: ModelAssemblyInput, corpus: string): boolean {
@@ -412,11 +510,20 @@ function buildAvailableItems(input: ModelAssemblyInput): AvailableAssemblyItem[]
 
   for (const variable of input.variables) {
     if (!safe(variable.symbol)) continue;
+    if (isPlaceholder(variable.symbol) && isPlaceholder(variable.name)) continue;
+    const role = lower(variable.role);
+    const itemType: AssemblyItemType =
+      role === "state" ? "state" :
+      role === "input" ? "input" :
+      role === "output" ? "output" :
+      role === "control" ? "control" :
+      role === "parameter" ? "parameter" :
+      "output";
     addAvailable(
       out,
       seen,
-      `${variable.role === "state" ? "State variable" : "Variable"} ${variable.symbol}`,
-      variable.role === "state" ? "state" : "control",
+      `${role === "state" ? "State variable" : "Variable"} ${variable.symbol}`,
+      itemType,
       variable.sourceQuote,
       "medium",
     );
@@ -424,11 +531,20 @@ function buildAvailableItems(input: ModelAssemblyInput): AvailableAssemblyItem[]
 
   for (const rawVariable of input.raw?.state_variables ?? []) {
     if (!safe(rawVariable.symbol)) continue;
+    if (isPlaceholder(rawVariable.symbol) && isPlaceholder(rawVariable.name)) continue;
+    const role = lower(rawVariable.role);
+    const itemType: AssemblyItemType =
+      role === "state" ? "state" :
+      role === "input" ? "input" :
+      role === "output" ? "output" :
+      role === "control" ? "control" :
+      role === "parameter" ? "parameter" :
+      "output";
     addAvailable(
       out,
       seen,
-      `${rawVariable.role === "state" ? "State variable" : "Variable"} ${rawVariable.symbol}`,
-      rawVariable.role === "state" ? "state" : "control",
+      `${role === "state" ? "State variable" : "Variable"} ${rawVariable.symbol}`,
+      itemType,
       rawVariable.source_context ?? "",
       confidence(rawVariable.confidence),
     );
@@ -437,19 +553,39 @@ function buildAvailableItems(input: ModelAssemblyInput): AvailableAssemblyItem[]
   for (const parameter of input.parameters) {
     if (!safe(parameter.symbol)) continue;
     const symbol = symbolText(parameter.symbol);
+    const parameterNameText = lower(parameter.name);
+    const sourceQuote = lower(parameter.sourceQuote);
+    const original = parameter.originalValue as { kind?: string; status?: string } | null | undefined;
+    const isInitialCondition =
+      original?.kind === "initial_condition" ||
+      original?.status === "initial_condition" ||
+      parameterNameText.includes("initial condition") ||
+      sourceQuote.includes("[initial_condition]");
     const isControl =
       symbol === "d" ||
       symbol === "doset" ||
       symbol === "dosp" ||
-      symbol === "kla" ||
-      /setpoint|control/i.test(parameter.sourceQuote);
+      /\b(setpoint|control|controlled|manipulated|set point)\b/i.test(parameter.sourceQuote);
     addAvailable(
       out,
       seen,
-      parameterLabel(parameter),
-      isControl ? "control" : "parameter",
+      isInitialCondition ? (parameter.name || parameterLabel(parameter)) : parameterLabel(parameter),
+      isInitialCondition ? "initial_condition" : isControl ? "control" : "parameter",
       parameter.sourceQuote,
       confidence(parameter.confidence),
+    );
+  }
+
+  for (const initialCondition of input.raw?.initial_conditions ?? []) {
+    const stateSymbol = safe(initialCondition.state_symbol) || safe(initialCondition.symbol).replace(/(?:0|_0)$/i, "");
+    if (!stateSymbol) continue;
+    addAvailable(
+      out,
+      seen,
+      `Initial condition for ${stateSymbol}`,
+      "initial_condition",
+      initialCondition.source_context ?? "Initial condition reported in extracted source data.",
+      confidence(initialCondition.confidence),
     );
   }
 
@@ -468,7 +604,14 @@ function buildAvailableItems(input: ModelAssemblyInput): AvailableAssemblyItem[]
 
   for (const assumption of input.assumptions) {
     if (!safe(assumption.text)) continue;
-    addAvailable(out, seen, assumption.text, "assumption", assumption.text, "low");
+    addAvailable(
+      out,
+      seen,
+      assumption.text,
+      lower(assumption.kind) === "limitation" ? "limitation" : "assumption",
+      assumption.text,
+      "low",
+    );
   }
 
   if (/\bdo\b.*\b(control|controlled|setpoint)/.test(corpus)) {
@@ -491,13 +634,16 @@ function buildAvailableItems(input: ModelAssemblyInput): AvailableAssemblyItem[]
       "high",
     );
   }
-  if (/\breactor volume\b|\bworking volume\b|\bvolume\b/.test(corpus)) {
+  if (
+    /\b(?:reactor|working)\s+volume\b[^.]{0,80}\b\d+(?:\.\d+)?\s*(?:l|liter|litre|ml|m3|m\^3)\b/.test(corpus) ||
+    /\bv\s*=\s*\d+(?:\.\d+)?\s*(?:l|liter|litre|ml|m3|m\^3)\b/.test(corpus)
+  ) {
     addAvailable(
       out,
       seen,
       "Reactor volume",
       "parameter",
-      contextFromTexts(textParts, [/\breactor volume\b|\bworking volume\b|\bvolume\b/], "Reactor volume mentioned in source text."),
+      contextFromTexts(textParts, [/\b(?:reactor|working)\s+volume\b/, /\bv\s*=\s*\d/], "Numeric reactor volume mentioned in source text."),
       "high",
     );
   }
@@ -537,6 +683,104 @@ function addChemostatChecks(
       required_for: "substrate inlet balance",
       why_needed: "The inlet concentration or feed rate sets the forcing term for substrate dynamics.",
       suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+}
+
+function hasStateSymbol(input: ModelAssemblyInput, symbol: string): boolean {
+  const target = symbolText(symbol);
+  return [...stateSymbols(input)].includes(target);
+}
+
+function hasParameterSymbol(input: ModelAssemblyInput, symbol: string): boolean {
+  const target = symbolText(symbol);
+  return [
+    ...input.parameters.map((parameter) => parameter.symbol),
+    ...(input.raw?.parameters ?? []).map((parameter) => parameter.symbol ?? ""),
+  ].some((value) => symbolText(value) === target);
+}
+
+function addMonodCompletenessChecks(
+  input: ModelAssemblyInput,
+  missing: MissingRequirement[],
+  seen: Set<string>,
+): void {
+  if (!hasStateSymbol(input, "X")) {
+    addMissing(missing, seen, {
+      item: "Biomass state X",
+      category: "source_document",
+      required_for: "Monod chemostat biomass balance",
+      why_needed: "Runnable Monod chemostat simulation requires X as a dynamic state.",
+      suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+  if (!hasStateSymbol(input, "S")) {
+    addMissing(missing, seen, {
+      item: "Substrate state S",
+      category: "source_document",
+      required_for: "Monod chemostat substrate balance",
+      why_needed: "Runnable Monod chemostat simulation requires S as a dynamic state.",
+      suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+  if (!hasEquation(input, [/^\s*mu\s*=|\bmu\s*=.*\bmumax\b.*\bks\b/i])) {
+    addMissing(missing, seen, {
+      item: "Monod growth equation mu",
+      category: "source_document",
+      required_for: "specific growth-rate calculation",
+      why_needed: "The chemostat balances need an explicit growth-rate relation for mu.",
+      suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+  if (!hasEquation(input, [/d\s*x\s*\/\s*d\s*t\s*=/i])) {
+    addMissing(missing, seen, {
+      item: "Biomass balance dX/dt",
+      category: "source_document",
+      required_for: "biomass ODE",
+      why_needed: "Runnable simulation requires the biomass derivative equation.",
+      suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+  if (!hasEquation(input, [/d\s*s\s*\/\s*d\s*t\s*=/i])) {
+    addMissing(missing, seen, {
+      item: "Substrate balance dS/dt",
+      category: "source_document",
+      required_for: "substrate ODE",
+      why_needed: "Runnable simulation requires the substrate derivative equation.",
+      suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+  for (const symbol of ["mumax", "Ks", "D", "Sin", "Yxs"]) {
+    if (hasParameterSymbol(input, symbol)) continue;
+    addMissing(missing, seen, {
+      item: `Monod parameter ${symbol}`,
+      category:
+        symbol === "D" || symbol === "Sin"
+          ? "control_parameter"
+          : symbol === "Yxs"
+            ? "stoichiometric_yield"
+            : "kinetic_parameter",
+      required_for: "complete Monod chemostat simulation",
+      why_needed: `Runnable Monod chemostat simulation requires ${symbol}.`,
+      suggested_source: "current paper",
+      severity: "critical",
+    });
+  }
+  const initials = initialConditionStates(input);
+  for (const state of ["X", "S"]) {
+    if (initials.has(symbolText(state))) continue;
+    addMissing(missing, seen, {
+      item: `Initial condition ${state}0`,
+      category: "initial_condition",
+      required_for: "Monod ODE simulation start values",
+      why_needed: `Runnable Monod simulation requires an initial value for ${state}.`,
+      suggested_source: "user_assumption",
       severity: "critical",
     });
   }
@@ -687,8 +931,18 @@ function addGeneralDynamicChecks(
   seen: Set<string>,
 ): void {
   const hasStateRows =
-    input.variables.some((variable) => lower(variable.role) === "state") ||
-    (input.raw?.state_variables ?? []).some((variable) => lower(variable.role) === "state");
+    input.variables.some(
+      (variable) =>
+        lower(variable.role) === "state" &&
+        !isPlaceholder(variable.symbol) &&
+        !isPlaceholder(variable.name),
+    ) ||
+    (input.raw?.state_variables ?? []).some(
+      (variable) =>
+        lower(variable.role) === "state" &&
+        !isPlaceholder(variable.symbol) &&
+        !isPlaceholder(variable.name),
+    );
   const hasOde = hasEquation(input, [/d\s*[a-z][a-z0-9_]*\s*\/\s*d\s*t/i]);
 
   if (!hasStateRows) {
@@ -768,8 +1022,18 @@ function deriveStatus(
   const critical = missing.filter((item) => item.severity === "critical").length;
   const hasEquations = input.equations.length > 0 || (input.raw?.equations ?? []).length > 0;
   const hasStates =
-    input.variables.some((variable) => lower(variable.role) === "state") ||
-    (input.raw?.state_variables ?? []).some((variable) => lower(variable.role) === "state");
+    input.variables.some(
+      (variable) =>
+        lower(variable.role) === "state" &&
+        !isPlaceholder(variable.symbol) &&
+        !isPlaceholder(variable.name),
+    ) ||
+    (input.raw?.state_variables ?? []).some(
+      (variable) =>
+        lower(variable.role) === "state" &&
+        !isPlaceholder(variable.symbol) &&
+        !isPlaceholder(variable.name),
+    );
   const hasParameters = input.parameters.length > 0 || (input.raw?.parameters ?? []).length > 0;
   const canGenerateScaffold = hasEquations || hasStates || hasParameters;
 
@@ -810,6 +1074,9 @@ export function analyzeModelAssembly(input: ModelAssemblyInput): ModelAssemblyRe
     targetModelType === "oxygen_balanced_mixotrophy"
   ) {
     addChemostatChecks(input, missing, missingSeen);
+  }
+  if (targetModelType === "monod_chemostat") {
+    addMonodCompletenessChecks(input, missing, missingSeen);
   }
   if (
     targetModelType === "microalgae_photobioreactor" ||

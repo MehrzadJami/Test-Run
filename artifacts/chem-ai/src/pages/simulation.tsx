@@ -41,11 +41,17 @@ import {
   SIMULATION_UNSUPPORTED_MESSAGE,
   type SupportedSimulationModelType,
 } from "@/lib/simulation-support";
+import { analyzeChemEModel } from "@workspace/cheme-brain";
+import { buildChemEBrainInputForModelCard } from "@/lib/cheme-brain-report";
+import { decideChemEBrainSimulationReadiness } from "@/lib/cheme-brain-readiness";
+import { CHEME_BRAIN_READINESS_AUTHORITY_ENABLED } from "@/lib/feature-flags";
+import { getParameterNumericValue } from "@/lib/parameter-values";
 import {
   batchCultureODE,
   monodChemostatODE,
   rk4,
   type SimulationPoint,
+  type SimulationResult,
 } from "@/lib/simulation-engine";
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -93,6 +99,8 @@ const REQUIRED_FIELDS: Record<SupportedSimulationModelType, Array<keyof SimParam
 
 // ─── validation ───────────────────────────────────────────────────────────────
 
+const MAX_SIMULATION_STEPS = 100_000; // ~100 s at dt=0.001; prevents browser freeze
+
 function validate(p: SimParams, modelType: SupportedSimulationModelType): ValidationError[] {
   const errors: ValidationError[] = [];
   if (p.mumax <= 0) errors.push({ field: "mumax", message: "μmax must be > 0" });
@@ -106,6 +114,11 @@ function validate(p: SimParams, modelType: SupportedSimulationModelType): Valida
   if (p.dt <= 0) errors.push({ field: "dt", message: "Time step must be > 0" });
   if (p.dt > 0 && p.tFinal > 0 && p.dt >= p.tFinal)
     errors.push({ field: "dt", message: "Time step must be smaller than final time" });
+  if (p.dt > 0 && p.tFinal > 0 && p.tFinal / p.dt > MAX_SIMULATION_STEPS)
+    errors.push({
+      field: "dt",
+      message: `Too many steps: tFinal/dt = ${Math.ceil(p.tFinal / p.dt).toLocaleString()} exceeds limit of ${MAX_SIMULATION_STEPS.toLocaleString()}. Increase Δt or reduce simulation time.`,
+    });
   return errors;
 }
 
@@ -148,16 +161,20 @@ function downloadCsv(
   params: SimParams,
   modelType: SupportedSimulationModelType,
 ) {
+  const MAX_CSV_ROWS = 10_000;
+  const truncated = data.length > MAX_CSV_ROWS;
+  const exportData = truncated ? data.slice(0, MAX_CSV_ROWS) : data;
   const meta = [
     `# ChemAI Model Compiler — ${modelType === "batch_culture" ? "Batch Culture" : "Chemostat"} Simulation`,
     modelType === "batch_culture"
       ? `# mumax=${params.mumax} Ks=${params.Ks} Yxs=${params.Yxs}`
       : `# mumax=${params.mumax} Ks=${params.Ks} D=${params.D} Sin=${params.Sin} Yxs=${params.Yxs}`,
     `# X0=${params.X0} S0=${params.S0} tFinal=${params.tFinal} dt=${params.dt}`,
+    truncated ? `# NOTE: output capped at ${MAX_CSV_ROWS} rows (${data.length} total points)` : "",
     "",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   const header = "time_h,X_g_per_L,S_g_per_L\n";
-  const rows = data.map((pt) => `${pt.t},${pt.X},${pt.S}`).join("\n");
+  const rows = exportData.map((pt) => `${pt.t},${pt.X},${pt.S}`).join("\n");
   const blob = new Blob([meta + header + rows], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -256,13 +273,39 @@ function isComplete(
 
 type SimulationParameterRow = {
   symbol?: string | null;
+  name?: string | null;
   value?: string | number | null;
+  valueRaw?: string | null;
+  valueNumeric?: number | null;
+  unit?: string | null;
+  confidence?: string | null;
+  sourceQuote?: string | null;
+  originalValue?: Record<string, unknown> | null;
 };
 
 type SimulationVariableRow = {
   symbol?: string | null;
+  name?: string | null;
+  role?: string | null;
+  unit?: string | null;
   sourceQuote?: string | null;
   originalValue?: Record<string, unknown> | null;
+};
+
+type SimulationEquationRow = {
+  id?: number;
+  latex?: string | null;
+  plaintext?: string | null;
+  meaning?: string | null;
+  description?: string | null;
+  equationType?: string | null;
+  sourceQuote?: string | null;
+};
+
+type SimulationAssumptionRow = {
+  text: string;
+  sourceQuote?: string | null;
+  confidence?: string | null;
 };
 
 type SimulationRawExtraction = {
@@ -277,18 +320,30 @@ type SimulationRawExtraction = {
     initial_condition?: string | number | null;
     source_context?: string | null;
   }>;
+  initial_conditions?: Array<{
+    symbol?: string | null;
+    state_symbol?: string | null;
+    value?: string | number | null;
+    value_numeric?: number | null;
+  }>;
 };
 
 type SimulationCard = {
   extraction: {
+    modelCardTitle?: string | null;
+    providerUsed?: string | null;
     modelType?: string | null;
     modelTypeOverride?: string | null;
-    modelCardTitle?: string | null;
     domain?: string | null;
+    systemDescription?: string | null;
+    problemStatement?: string | null;
     rawExtractionJson?: unknown;
   };
   parameters: SimulationParameterRow[];
   variables: SimulationVariableRow[];
+  equations?: SimulationEquationRow[];
+  assumptionItems?: SimulationAssumptionRow[];
+  limitationItems?: SimulationAssumptionRow[];
 };
 
 type BoundValues = {
@@ -315,16 +370,17 @@ function parseNumberValue(value: unknown): number | null {
 
 function buildParamMap(card: SimulationCard | undefined): Map<string, number> {
   const map = new Map<string, number>();
-  const add = (symbol: unknown, value: unknown) => {
+  const add = (parameter: SimulationParameterRow) => {
+    const { symbol } = parameter;
     const key = normalizeSymbol(String(symbol ?? ""));
-    const parsed = parseNumberValue(value);
+    const parsed = getParameterNumericValue(parameter);
     if (key && parsed !== null) map.set(key, parsed);
   };
 
-  for (const parameter of card?.parameters ?? []) add(parameter.symbol, parameter.value);
+  for (const parameter of card?.parameters ?? []) add(parameter);
 
   const raw = card?.extraction.rawExtractionJson as SimulationRawExtraction | null | undefined;
-  for (const parameter of raw?.parameters ?? []) add(parameter.symbol, parameter.value);
+  for (const parameter of raw?.parameters ?? []) add(parameter);
 
   return map;
 }
@@ -435,7 +491,8 @@ export default function Simulation() {
         Object.entries(DEMO_PARAMS).map(([k, v]) => [k, String(v)])
       )
   );
-  const [simData, setSimData] = useState<SimulationPoint[] | null>(null);
+  const [simResult, setSimResult] = useState<SimulationResult | null>(null);
+  const simData = simResult?.points ?? null;
   const [hasRun, setHasRun] = useState(false);
   const [lastParams, setLastParams] = useState<SimParams | null>(null);
   const [valueSource, setValueSource] = useState<"demo" | "extracted">("demo");
@@ -463,24 +520,87 @@ export default function Simulation() {
       domain: modelCard.extraction.domain,
       parameters: modelCard.parameters,
     });
+    const chemEBrainReport = CHEME_BRAIN_READINESS_AUTHORITY_ENABLED
+      ? analyzeChemEModel(
+          buildChemEBrainInputForModelCard({
+            extraction: {
+              modelCardTitle: modelCard.extraction.modelCardTitle ?? "Model card",
+              providerUsed: modelCard.extraction.providerUsed ?? "unknown",
+              domain: modelCard.extraction.domain ?? "unknown",
+              systemDescription: modelCard.extraction.systemDescription,
+              problemStatement: modelCard.extraction.problemStatement,
+              modelType: modelCard.extraction.modelType,
+              modelTypeOverride: modelCard.extraction.modelTypeOverride,
+            },
+            equations: (modelCard.equations ?? []).map((equation, index) => ({
+              id: equation.id ?? index + 1,
+              latex: equation.latex ?? equation.plaintext ?? "",
+              plaintext: equation.plaintext ?? equation.latex ?? "",
+              meaning: equation.meaning ?? undefined,
+              description: equation.description ?? undefined,
+              equationType: equation.equationType,
+              sourceQuote: equation.sourceQuote ?? "",
+            })),
+            variables: modelCard.variables.map((variable) => ({
+              symbol: String(variable.symbol ?? ""),
+              name: variable.name ?? "",
+              role: variable.role ?? "",
+              unit: variable.unit ?? "",
+              sourceQuote: variable.sourceQuote ?? "",
+              originalValue: variable.originalValue,
+            })),
+            parameters: modelCard.parameters.map((parameter) => ({
+              symbol: String(parameter.symbol ?? ""),
+              name: parameter.name ?? "",
+              value: parameter.value,
+              valueRaw: parameter.valueRaw,
+              valueNumeric: parameter.valueNumeric,
+              unit: parameter.unit,
+              confidence: parameter.confidence ?? undefined,
+              sourceQuote: parameter.sourceQuote ?? "",
+              originalValue: parameter.originalValue,
+            })),
+            assumptionItems: (modelCard.assumptionItems ?? []).map((item) => ({
+              text: item.text,
+              sourceQuote: item.sourceQuote ?? undefined,
+              confidence: item.confidence ?? undefined,
+            })),
+            limitationItems: (modelCard.limitationItems ?? []).map((item) => ({
+              text: item.text,
+              sourceQuote: item.sourceQuote ?? undefined,
+              confidence: item.confidence ?? undefined,
+            })),
+            raw: rawExtraction as any,
+          }),
+        )
+      : null;
+    const readiness = decideChemEBrainSimulationReadiness({
+      featureEnabled: CHEME_BRAIN_READINESS_AUTHORITY_ENABLED,
+      report: chemEBrainReport,
+      legacySupportedModelType: supportedType,
+      parameters: modelCard.parameters,
+      equations: modelCard.equations,
+      variables: modelCard.variables,
+      raw: rawExtraction ?? null,
+    });
 
-    if (!supportedType) {
-      setUnsupportedModelMessage(SIMULATION_UNSUPPORTED_MESSAGE);
+    if (!readiness.canRunSimulation || !readiness.runtimeModelType) {
+      setUnsupportedModelMessage(CHEME_BRAIN_READINESS_AUTHORITY_ENABLED ? readiness.message : SIMULATION_UNSUPPORTED_MESSAGE);
       setValueSource("demo");
       setBoundFields([]);
-      setSimData(null);
+      setSimResult(null);
       setHasRun(false);
       setLastParams(null);
       return;
     }
 
-    const bound = bindExtractedValues(modelCard, supportedType);
+    const bound = bindExtractedValues(modelCard, readiness.runtimeModelType);
     setRawParams(bound.rawParams);
     setUnsupportedModelMessage(null);
-    setActiveModelType(supportedType);
+    setActiveModelType(readiness.runtimeModelType);
     setValueSource(bound.boundFields.length > 0 ? "extracted" : "demo");
     setBoundFields(bound.boundFields);
-    setSimData(null);
+    setSimResult(null);
     setHasRun(false);
     setLastParams(null);
   }, [canUseModelData, modelCard, rawExtraction]);
@@ -504,7 +624,7 @@ export default function Simulation() {
 
   const handleRun = useCallback(() => {
     if (unsupportedModelMessage || !isComplete(parsed, activeModelType) || errors.length > 0) return;
-    const data = rk4(
+    const result = rk4(
       activeModelType === "batch_culture" ? batchCultureODE : monodChemostatODE,
       {
         initialState: { X: parsed.X0, S: parsed.S0 },
@@ -513,7 +633,7 @@ export default function Simulation() {
         dt: parsed.dt,
       },
     );
-    setSimData(data);
+    setSimResult(result);
     setLastParams({ ...parsed });
     setHasRun(true);
   }, [parsed, errors, unsupportedModelMessage, activeModelType]);
@@ -524,7 +644,7 @@ export default function Simulation() {
         Object.entries(DEMO_PARAMS).map(([k, v]) => [k, String(v)])
       )
     );
-    setSimData(null);
+    setSimResult(null);
     setHasRun(false);
     setLastParams(null);
     setValueSource("demo");
@@ -662,6 +782,18 @@ export default function Simulation() {
           <AlertDescription className="text-sm">{w.message}</AlertDescription>
         </Alert>
       ))}
+      {simResult?.clampedNegative && (
+        <Alert className="border-red-400/50 bg-red-50/50 dark:bg-red-950/20">
+          <AlertTriangle className="h-4 w-4 text-red-500" />
+          <AlertDescription className="text-sm">
+            <strong>Numerical instability detected:</strong>{" "}
+            {simResult.clampedSymbols.length > 0
+              ? `State variable${simResult.clampedSymbols.length > 1 ? "s" : ""} [${simResult.clampedSymbols.join(", ")}] went negative`
+              : "A state variable went negative"}{" "}
+            and was clamped to 0. This typically indicates the time step Δt is too large or the ODE formulation contains an error. Try reducing Δt.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
         {/* ══ left: parameter cards ══ */}

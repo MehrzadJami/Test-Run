@@ -14,6 +14,7 @@
 
 import type { PythonGeneratorInput } from "./python-generator";
 import type { RawExtraction } from "./reproducibility";
+import { getParameterDisplayValue } from "./parameter-values";
 
 // ─── Public input type ─────────────────────────────────────────────────────────
 
@@ -175,7 +176,7 @@ function makeParametersCell(input: NotebookGeneratorInput, id: string): Markdown
     lines.push("| — | *(none extracted)* | — | — |");
   } else {
     for (const p of parameters) {
-      const val = p.value != null && String(p.value).trim() !== "" ? String(p.value) : "**TODO**";
+      const val = getParameterDisplayValue(p);
       lines.push(
         `| \`${mdEsc(p.symbol)}\` | ${val} | ${mdEsc(safe(p.unit) || "—")} | ${p.confidence} |`,
       );

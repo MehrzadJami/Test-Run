@@ -15,4 +15,9 @@ export interface ParsePdfResult {
   wordCount: number;
   /** Character count of extracted text. */
   charCount: number;
+  fallback_required?: boolean;
+  /** @nullable */
+  message?: string | null;
+  diagnostics?: { [key: string]: unknown };
+  structuredDocument?: { [key: string]: unknown };
 }

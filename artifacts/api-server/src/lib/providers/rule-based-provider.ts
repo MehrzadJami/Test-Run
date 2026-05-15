@@ -1,4 +1,5 @@
 import type { ExtractionProvider, ProviderName } from "../extractor";
+import { logger } from "../logger";
 import type {
   ExtractionResult,
   ExtractedAssumption,
@@ -239,20 +240,31 @@ function isNumericAssignment(expression: string): boolean {
 }
 
 function sourceContextForMatch(sourceText: string, start: number, end: number): string {
-  const before = sourceText.slice(0, start);
-  const sentenceStart = Math.max(
-    before.lastIndexOf("."),
-    before.lastIndexOf("!"),
-    before.lastIndexOf("?"),
-    before.lastIndexOf("\n"),
-  );
-  const after = sourceText.slice(end);
-  const nextStops = [".", "!", "?", "\n"]
-    .map((stop) => after.indexOf(stop))
-    .filter((idx) => idx >= 0);
-  const sentenceEnd =
-    nextStops.length > 0 ? end + Math.min(...nextStops) + 1 : sourceText.length;
-  return cleanLine(sourceText.slice(sentenceStart + 1, sentenceEnd));
+  let sentenceStart = 0;
+  for (let i = Math.max(0, start - 1); i >= 0; i -= 1) {
+    const char = sourceText[i];
+    const prev = sourceText[i - 1] ?? "";
+    const next = sourceText[i + 1] ?? "";
+    const isDecimalPoint = char === "." && /\d/.test(prev) && /\d/.test(next);
+    if ((char === "." || char === "!" || char === "?" || char === "\n") && !isDecimalPoint) {
+      sentenceStart = i + 1;
+      break;
+    }
+  }
+
+  let sentenceEnd = sourceText.length;
+  for (let i = end; i < sourceText.length; i += 1) {
+    const char = sourceText[i];
+    const prev = sourceText[i - 1] ?? "";
+    const next = sourceText[i + 1] ?? "";
+    const isDecimalPoint = char === "." && /\d/.test(prev) && /\d/.test(next);
+    if ((char === "." || char === "!" || char === "?" || char === "\n") && !isDecimalPoint) {
+      sentenceEnd = i + 1;
+      break;
+    }
+  }
+
+  return cleanLine(sourceText.slice(sentenceStart, sentenceEnd));
 }
 
 function extractEquationSymbols(expression: string): string[] {
@@ -279,8 +291,9 @@ function extractEquations(sourceText: string, normalizedLower: string): Extracte
   const seen = new Set<string>();
   const normalizedSource = normalizeSymbols(sourceText);
   const lhsPattern = `(?:d\\s*${SYMBOL_PATTERN}\\s*\\/\\s*d\\s*t|${SYMBOL_PATTERN})`;
+  // Cap the RHS to 500 chars to prevent catastrophic matching on lines with no delimiters.
   const equationRe = new RegExp(
-    `(^|[^A-Za-z0-9_/])(${lhsPattern}\\s*=\\s*[^.;,\\n]+)`,
+    `(^|[^A-Za-z0-9_/])(${lhsPattern}\\s*=\\s*[^.;,\\n]{1,500})`,
     "g",
   );
 
@@ -591,7 +604,7 @@ function outputSymbols(variables: ExtractedStateVariable[]): string[] {
 function controlVariableSymbols(parameters: ExtractedParameter[]): string[] {
   return uniqueStrings(
     parameters
-      .filter((parameter) => ["d", "kla"].includes(parameter.symbol.toLowerCase()))
+      .filter((parameter) => parameter.symbol.toLowerCase() === "d")
       .map((parameter) => parameter.symbol),
   );
 }
@@ -682,7 +695,8 @@ export class RuleBasedProvider implements ExtractionProvider {
           can_generate_ode_template: canGenerateOdeTemplate(equations),
         },
       };
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, "Rule-based provider extraction failed — returning fallback result");
       return fallbackResult(sourceText);
     }
   }

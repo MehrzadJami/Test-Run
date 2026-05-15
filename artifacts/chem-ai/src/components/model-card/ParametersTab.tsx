@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   usePatchParameter,
@@ -25,6 +25,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  getParameterDisplayValue,
+  getParameterNumericValue,
+} from "@/lib/parameter-values";
 import {
   Select,
   SelectContent,
@@ -65,12 +69,21 @@ export function ParametersTab({ projectId, parameters }: Props) {
   const [draft, setDraft] = useState<PatchParameterInput>({});
   const formRef = useRef<HTMLFormElement>(null);
 
+  useEffect(() => {
+    return () => {
+      setEditing(null);
+      setDraft({});
+      patch.reset();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function openEdit(p: Parameter) {
     setEditing(p);
     setDraft({
       symbol: p.symbol,
       name: p.name,
-      value: p.value,
+      value: getParameterNumericValue(p) ?? undefined,
       unit: p.unit,
       confidence: p.confidence,
       sourceQuote: p.sourceQuote,
@@ -108,7 +121,7 @@ export function ParametersTab({ projectId, parameters }: Props) {
               </TableCell>
               <TableCell className="text-sm">{p.name || "—"}</TableCell>
               <TableCell className="font-mono text-sm">
-                {p.value ?? <span className="text-destructive italic text-xs">missing</span>}
+                {getParameterDisplayValue(p)}
               </TableCell>
               <TableCell>
                 <span className={`font-mono text-xs rounded px-2 py-1 ${p.unit ? "bg-muted/50" : "bg-destructive/10 text-destructive"}`}>
@@ -172,8 +185,20 @@ export function ParametersTab({ projectId, parameters }: Props) {
                   id="p-value"
                   type="number"
                   step="any"
+                  placeholder="unknown — enter a numeric value"
                   value={draft.value ?? ""}
-                  onChange={(e) => setDraft((d) => ({ ...d, value: parseFloat(e.target.value) }))}
+                  onChange={(e) =>
+                    setDraft((d) => {
+                      const parsed = Number(e.target.value);
+                      return {
+                        ...d,
+                        value:
+                          e.target.value.trim() !== "" && Number.isFinite(parsed)
+                            ? parsed
+                            : undefined,
+                      };
+                    })
+                  }
                 />
               </div>
               <div className="space-y-1">

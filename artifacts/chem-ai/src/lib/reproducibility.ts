@@ -7,6 +7,7 @@
  * Conservative by design: marks items as missing/uncertain unless they are
  * explicitly present. Does not hallucinate values.
  */
+import { hasKnownParameterValue } from "./parameter-values";
 
 // ─── Input types (mirrors normalized DB rows + raw_extraction_json shape) ────
 
@@ -15,6 +16,7 @@ export interface AnalysisEquation {
   latex: string;
   description: string;
   sourceQuote: string;
+  equationType?: string | null | undefined;
 }
 
 export interface AnalysisVariable {
@@ -24,15 +26,20 @@ export interface AnalysisVariable {
   unit?: string | null | undefined;
   role: string;
   sourceQuote: string;
+  originalValue?: Record<string, unknown> | null | undefined;
 }
 
 export interface AnalysisParameter {
   id: number;
   symbol: string;
   value?: number | string | null | undefined;
+  valueRaw?: string | null | undefined;
+  valueNumeric?: number | null | undefined;
   unit?: string | null | undefined;
   confidence: string;
   sourceQuote: string;
+  name?: string | null | undefined;
+  originalValue?: Record<string, unknown> | null | undefined;
 }
 
 export interface AnalysisAssumption {
@@ -45,6 +52,7 @@ export interface RawEqEntry {
   label?: string;
   equation_latex?: string;
   equation_plaintext?: string;
+  equation_type?: string;
   meaning?: string;
   variables_involved?: string[];
   source_context?: string;
@@ -58,12 +66,25 @@ export interface RawVarEntry {
   role?: string;
   source_context?: string;
   confidence?: string;
+  initial_condition?: RawInitialConditionEntry;
 }
 
 export interface RawParamEntry {
   symbol?: string;
   name?: string;
   value?: string;
+  unit?: string;
+  source_context?: string;
+  confidence?: string;
+  status?: string;
+}
+
+export interface RawInitialConditionEntry {
+  symbol?: string;
+  state_symbol?: string;
+  name?: string;
+  value?: string;
+  value_numeric?: number | null;
   unit?: string;
   source_context?: string;
   confidence?: string;
@@ -98,6 +119,7 @@ export interface RawExtractionInput {
   process_description?: string;
   state_variables?: RawVarEntry[];
   parameters?: RawParamEntry[];
+  initial_conditions?: RawInitialConditionEntry[];
   equations?: RawEqEntry[];
   assumptions?: RawAssumptionEntry[];
   limitations?: RawLimitationEntry[];
@@ -155,6 +177,26 @@ function hasValue(v: unknown): boolean {
 
 function unique<T>(arr: T[]): T[] {
   return [...new Set(arr)];
+}
+
+function safeText(v: unknown): string {
+  return v == null ? "" : String(v).trim();
+}
+
+function isInitialConditionParameter(parameter: AnalysisParameter): boolean {
+  const symbol = safeText(parameter.symbol);
+  const name = safeText(parameter.name);
+  const source = safeText(parameter.sourceQuote);
+  const originalKind = safeText(parameter.originalValue?.kind ?? parameter.originalValue?.status);
+  return (
+    /^(?:[A-Za-z][A-Za-z0-9_]*0|[A-Za-z][A-Za-z0-9_]*_0)$/.test(symbol) ||
+    /initial\s+condition/i.test(`${name} ${source} ${originalKind}`) ||
+    originalKind === "initial_condition"
+  );
+}
+
+function isDerivativeNotationToken(symbol: string): boolean {
+  return /^d[A-Z][A-Za-z0-9_]*$/.test(symbol) || /^d[A-Za-z][A-Za-z0-9_]*\/dt$/.test(symbol);
 }
 
 // ─── Main analysis function ───────────────────────────────────────────────────
@@ -251,7 +293,7 @@ export function analyzeReproducibility(
     // 20 pts for having any parameters
     paramScore += 20;
 
-    const withValue = parameters.filter((p) => hasValue(p.value));
+    const withValue = parameters.filter(hasKnownParameterValue);
     const withUnit = parameters.filter((p) => hasValue(p.unit));
     const withSource = parameters.filter((p) => hasValue(p.sourceQuote));
 
@@ -259,7 +301,7 @@ export function analyzeReproducibility(
     paramScore += pct(withUnit.length, parameters.length) * 0.25;
     paramScore += pct(withSource.length, parameters.length) * 0.15;
 
-    const noValue = parameters.filter((p) => !hasValue(p.value));
+    const noValue = parameters.filter((p) => !hasKnownParameterValue(p));
     if (noValue.length > 0) {
       missing.push({
         severity: "critical",
@@ -342,7 +384,21 @@ export function analyzeReproducibility(
 
   const stateVars = variables.filter((v) => v.role === "state");
 
-  // Patterns that indicate initial conditions are documented
+  // IC parameter coverage: check which state variables have an explicit IC parameter
+  // (symbol like X0, X_0, x0, etc.) rather than just checking text patterns.
+  // This prevents "ready" status when only SOME state variables have ICs.
+  const icParamSymbols = new Set(
+    parameters
+      .filter(isInitialConditionParameter)
+      .map((p) => p.symbol.toLowerCase().replace(/_?0$/, "").replace(/_$/, ""))
+  );
+
+  const stateVarsWithIC = stateVars.filter((v) =>
+    icParamSymbols.has(v.symbol.toLowerCase())
+  );
+  const icCoverage = stateVars.length > 0 ? stateVarsWithIC.length / stateVars.length : 0;
+
+  // Fallback: if IC parameters aren't found, look for text-pattern mentions
   const icPattern =
     /\b(initial\s*(condition|value|concentration|biomass|substrate|state|population)|x_?0|s_?0|c_?0|x\(0\)|s\(0\)|at\s*t\s*=\s*0|t0\s*=)\b/;
   const mentionsIC = icPattern.test(corpus);
@@ -363,8 +419,30 @@ export function analyzeReproducibility(
   } else {
     icScore += 25; // partial credit for having state variables
 
-    if (mentionsIC) {
-      icScore += 45;
+    // Prefer per-state-variable IC parameter coverage over text mentions
+    if (icCoverage >= 1.0) {
+      icScore += 45; // all state variables have explicit IC parameters
+    } else if (icCoverage > 0) {
+      // Partial coverage: proportional credit but add a warning
+      icScore += Math.round(45 * icCoverage);
+      const missing_svs = stateVars
+        .filter((v) => !icParamSymbols.has(v.symbol.toLowerCase()))
+        .map((v) => v.symbol);
+      missing.push({
+        severity: "critical",
+        category: "Initial Conditions",
+        description: `Initial conditions found for only ${stateVarsWithIC.length}/${stateVars.length} state variables. Missing ICs for: ${missing_svs.join(", ")}. Simulation cannot run without all starting values.`,
+      });
+      blockers.push(`Initial conditions missing for: ${missing_svs.join(", ")}`);
+    } else if (mentionsIC) {
+      // Text mentions but no explicit IC parameters — partial credit
+      icScore += 25;
+      missing.push({
+        severity: "warning",
+        category: "Initial Conditions",
+        description:
+          "Initial conditions are mentioned in the text but are not extracted as explicit parameter values. Add X₀, S₀, etc. to the parameters table with numeric values.",
+      });
     } else {
       missing.push({
         severity: "critical",
@@ -487,7 +565,7 @@ export function analyzeReproducibility(
     for (const eq of rawEqs) {
       for (const sym of eq.variables_involved ?? []) {
         const s = sym.toLowerCase().replace(/[^a-z0-9_]/g, "");
-        if (s.length > 0 && !knownSymbols.has(s)) {
+        if (s.length > 0 && !isDerivativeNotationToken(sym) && !knownSymbols.has(s)) {
           undefinedSymbols.push(sym);
         }
       }
@@ -512,7 +590,7 @@ export function analyzeReproducibility(
       .toLowerCase();
 
     const unusedParams = parameters.filter(
-      (p) => !allEqText.includes(p.symbol.toLowerCase())
+      (p) => !isInitialConditionParameter(p) && !allEqText.includes(p.symbol.toLowerCase())
     );
     if (unusedParams.length > 0 && unusedParams.length <= parameters.length) {
       missing.push({

@@ -1,13 +1,16 @@
 import { normalizeModelType } from "@workspace/domain-classifier";
+import { getParameterNumericValue } from "./parameter-values";
 
 export const SIMULATION_UNSUPPORTED_MESSAGE =
-  "Simulation for this model type is not yet supported. Use the scaffold/export instead.";
+  "Runnable simulation is not available because required model information is missing. A scaffold can still be exported.";
 
 export type SupportedSimulationModelType = "monod_chemostat" | "batch_culture";
 
 export type SimulationParameterLike = {
   symbol?: string | null;
   value?: string | number | null;
+  valueRaw?: string | null;
+  valueNumeric?: number | null;
 };
 
 export type SimulationSupportInput = {
@@ -47,8 +50,7 @@ function hasNumericParameter(
   return (parameters ?? []).some((parameter) => {
     const symbol = normalize(parameter.symbol);
     if (!normalizedAliases.includes(symbol)) return false;
-    const value = Number(parameter.value);
-    return Number.isFinite(value);
+    return getParameterNumericValue(parameter) !== null;
   });
 }
 

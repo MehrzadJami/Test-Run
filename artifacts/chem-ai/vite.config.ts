@@ -27,9 +27,16 @@ if (!isBuild) {
 
 const basePath = process.env.BASE_PATH ?? "/";
 const apiTarget = process.env.VITE_API_TARGET ?? "http://localhost:8080";
+const chemeBrainReadinessAuthority =
+  process.env.VITE_CHEME_BRAIN_READINESS_AUTHORITY ??
+  process.env.CHEME_BRAIN_READINESS_AUTHORITY ??
+  (process.env.NODE_ENV === "production" ? "false" : "true");
 
 export default defineConfig({
   base: basePath,
+  define: {
+    "import.meta.env.VITE_CHEME_BRAIN_READINESS_AUTHORITY": JSON.stringify(chemeBrainReadinessAuthority),
+  },
   plugins: [
     react(),
     tailwindcss(),

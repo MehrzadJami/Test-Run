@@ -12,4 +12,6 @@ export const VariableRole = {
   state: "state",
   input: "input",
   output: "output",
+  parameter: "parameter",
+  control: "control",
 } as const;

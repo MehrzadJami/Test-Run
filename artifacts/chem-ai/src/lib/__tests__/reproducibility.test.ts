@@ -202,4 +202,33 @@ describe("analyzeReproducibility — edge cases", () => {
     expect(r1.overall_score).toBe(r2.overall_score);
     expect(r1.simulation_readiness).toBe(r2.simulation_readiness);
   });
+
+  it("does not treat initial-condition rows as unused ODE parameters", () => {
+    const report = analyzeReproducibility(
+      [makeEquation({ latex: "dX/dt = (mu - D)*X", description: "Biomass balance" })],
+      [makeVariable({ symbol: "X", role: "state", unit: "g/L" })],
+      [
+        makeParameter({ symbol: "D", value: 0.1, unit: "1/h" }),
+        makeParameter({
+          symbol: "X0",
+          name: "Initial condition for X",
+          value: 0.1,
+          unit: "g/L",
+          sourceQuote: "Initial conditions are X0 = 0.1 g/L.",
+        }),
+      ],
+      [],
+      {
+        initial_conditions: [
+          { symbol: "X0", state_symbol: "X", value: "0.1", value_numeric: 0.1, unit: "g/L" },
+        ],
+      },
+      "Continuous chemostat",
+      "Initial conditions are X0 = 0.1 g/L.",
+      "dXdt = (mu - D) * X",
+    );
+
+    const descriptions = report.missing_items.map((item) => item.description).join("\n");
+    expect(descriptions).not.toMatch(/X0.*not referenced/);
+  });
 });

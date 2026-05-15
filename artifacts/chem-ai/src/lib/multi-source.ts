@@ -29,7 +29,9 @@ function norm(v: unknown): string {
 }
 
 function sourceName(extraction: any): string {
-  return extraction.modelCardTitle || `Extraction ${extraction.id}`;
+  if (extraction.modelCardTitle) return String(extraction.modelCardTitle);
+  const id = extraction.id ?? extraction.extractionId;
+  return id != null ? `Extraction ${id}` : "Unknown extraction";
 }
 
 export function buildAggregatedModelCard(extractions: any[]): AggregatedModelCard {
@@ -78,12 +80,13 @@ export function buildAggregatedModelCard(extractions: any[]): AggregatedModelCar
     for (const l of raw.limitations ?? []) if (l.limitation) limitations.add(String(l.limitation));
   }
 
+  // Sort all output arrays for deterministic ordering regardless of input call order.
   return {
-    variables: Array.from(varMap.values()).map((r) => ({ symbol: r.symbol, units: Array.from(r.units), meanings: Array.from(r.meanings), sources: Array.from(r.sources) })),
-    parameters: Array.from(paramMap.values()).map((r) => ({ symbol: r.symbol, values: Array.from(r.values), units: Array.from(r.units), sources: Array.from(r.sources) })),
-    equations: Array.from(eqMap.values()).map((r) => ({ key: r.key, equations: Array.from(r.equations), labels: Array.from(r.labels), sources: Array.from(r.sources) })),
-    assumptions: Array.from(assumptions),
-    limitations: Array.from(limitations),
+    variables: Array.from(varMap.values()).sort((a, b) => a.symbol.localeCompare(b.symbol)).map((r) => ({ symbol: r.symbol, units: Array.from(r.units).sort(), meanings: Array.from(r.meanings).sort(), sources: Array.from(r.sources).sort() })),
+    parameters: Array.from(paramMap.values()).sort((a, b) => a.symbol.localeCompare(b.symbol)).map((r) => ({ symbol: r.symbol, values: Array.from(r.values).sort(), units: Array.from(r.units).sort(), sources: Array.from(r.sources).sort() })),
+    equations: Array.from(eqMap.values()).sort((a, b) => a.key.localeCompare(b.key)).map((r) => ({ key: r.key, equations: Array.from(r.equations).sort(), labels: Array.from(r.labels).sort(), sources: Array.from(r.sources).sort() })),
+    assumptions: Array.from(assumptions).sort(),
+    limitations: Array.from(limitations).sort(),
   };
 }
 

@@ -7,6 +7,7 @@
  */
 import type { EquationConfidence } from "./equationConfidence";
 import type { EquationOriginalValue } from "./equationOriginalValue";
+import type { EquationType } from "./equationType";
 
 export interface Equation {
   id: number;
@@ -21,6 +22,8 @@ export interface Equation {
   meaning: string;
   /** Symbols appearing in this equation. */
   variablesInvolved: string[];
+  /** Scientific equation semantics; only dynamic_ode is runnable ODE content. */
+  equationType: EquationType;
   confidence: EquationConfidence;
   /** Auto-generated combined description (label + meaning + plaintext). Kept for backward compatibility. */
   description: string;

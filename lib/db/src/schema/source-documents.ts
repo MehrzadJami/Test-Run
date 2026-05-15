@@ -1,4 +1,11 @@
-import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  serial,
+  text,
+  integer,
+  timestamp,
+  jsonb,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -11,6 +18,7 @@ export const sourceDocumentsTable = pgTable("source_documents", {
   kind: text("kind", { enum: ["text", "pdf"] }).notNull(),
   filename: text("filename"),
   content: text("content").notNull(),
+  structuredDocument: jsonb("structured_document"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

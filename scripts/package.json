@@ -7,6 +7,8 @@
     "hello": "tsx ./src/hello.ts",
     "export-data": "tsx ./src/export-data.ts",
     "import-data": "tsx ./src/import-data.ts",
+    "verify:providers": "tsx ./src/verify-providers.ts",
+    "verify:groq": "tsx ./src/verify-groq.ts",
     "verify-real-extraction": "tsx ./src/verify-real-extraction.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

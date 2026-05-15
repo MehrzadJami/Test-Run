@@ -7,7 +7,7 @@ import {
 
 describe("simulation-engine", () => {
   it("integrates a simple exponential ODE with generic RK4", () => {
-    const points = rk4(
+    const result = rk4(
       (state) => ({ X: state.X }),
       {
         initialState: { X: 1 },
@@ -17,8 +17,9 @@ describe("simulation-engine", () => {
       },
     );
 
-    const final = points.at(-1);
+    const final = result.points.at(-1);
     expect(final?.X).toBeCloseTo(Math.E, 2);
+    expect(result.clampedNegative).toBe(false);
   });
 
   it("computes Monod chemostat derivatives", () => {

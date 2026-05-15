@@ -33,6 +33,19 @@ describe("simulation support detection", () => {
     ).toBeNull();
   });
 
+  it("blocks batch simulation when a required parameter has unknown numeric value", () => {
+    expect(
+      getSupportedSimulationModelType({
+        rawModelType: "batch_culture",
+        parameters: [
+          { symbol: "mumax", value: 0, valueRaw: "unknown", valueNumeric: null },
+          { symbol: "Ks", value: 0.1, valueNumeric: 0.1 },
+          { symbol: "Yxs", value: 0.5, valueNumeric: 0.5 },
+        ],
+      }),
+    ).toBeNull();
+  });
+
   it("does not support non-v1 or legacy implicit model metadata", () => {
     expect(isSupportedSimulationModel({ rawModelType: "gas_liquid" })).toBe(false);
     expect(isSupportedSimulationModel({ rawModelType: "gas_liquid_transfer" })).toBe(false);
@@ -47,7 +60,7 @@ describe("simulation support detection", () => {
 
   it("exposes the unsupported simulation message", () => {
     expect(SIMULATION_UNSUPPORTED_MESSAGE).toBe(
-      "Simulation for this model type is not yet supported. Use the scaffold/export instead.",
+      "Runnable simulation is not available because required model information is missing. A scaffold can still be exported.",
     );
   });
 });

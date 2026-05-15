@@ -21,13 +21,32 @@ function parsedPdf(
 }
 
 describe("PDF extraction flow helpers", () => {
-  it("stores parsed PDF text as a text source payload for extraction", () => {
-    const payload = buildParsedPdfSourcePayload(parsedPdf());
+  it("stores parsed PDF text with structured document context for extraction", () => {
+    const structuredDocument = {
+      title_guess: "Chemostat paper",
+      page_count: 2,
+      chunks: [
+        {
+          chunk_id: "chunk_001",
+          page_start: 1,
+          page_end: 1,
+          section_heading: "Methods",
+          text: "The biomass balance is dX/dt = (mu - D)*X.",
+          char_count: 47,
+        },
+      ],
+      diagnostics: {
+        text_quality: "good" as const,
+        warnings: [],
+      },
+    };
+    const payload = buildParsedPdfSourcePayload(parsedPdf({ structuredDocument }));
 
     expect(payload).toEqual({
-      kind: "text",
+      kind: "pdf",
       filename: "paper.pdf",
       content: "dX/dt = (mu - D)*X",
+      structuredDocument,
     });
   });
 
@@ -38,7 +57,9 @@ describe("PDF extraction flow helpers", () => {
         page_count: 1,
         chunks: [],
         diagnostics: {
-          text_quality: "fallback_required",
+          text_quality: "failed",
+          fallback_required: true,
+          message: PDF_FALLBACK_MESSAGE,
           warnings: [PDF_FALLBACK_MESSAGE],
         },
       },

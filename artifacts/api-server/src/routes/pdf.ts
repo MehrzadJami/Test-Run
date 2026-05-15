@@ -9,7 +9,7 @@
 // Size & sanity limits (all checked before any expensive work):
 //   MAX_PDF_BYTES  20 MB — hard limit on decoded PDF size
 //   MAX_PAGES      200   — reject large academic PDFs / books
-//   MIN_TEXT_CHARS  30   — reject blank/image-only PDFs immediately
+//   MIN_TEXT_CHARS  30   — return structured fallback for blank/image-only PDFs
 //
 // On any parse failure the client is told to fall back to the paste-text tab.
 // This route never touches the database; it is a pure utility endpoint.
@@ -56,7 +56,12 @@ const router: IRouter = Router();
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB
 const MAX_PAGES = 200;
 const MIN_TEXT_CHARS = 30;
-const OCR_MIN_CHARS = 120;
+// Allow operators to lower this threshold for diagram-heavy paper collections
+// where per-page char counts are naturally low but the PDF is not scanned.
+const OCR_MIN_CHARS = Math.max(
+  0,
+  parseInt(process.env["PDF_OCR_MIN_CHARS"] ?? "120", 10) || 120,
+);
 
 // base64 encoding inflates size by ~33 %; accept up to ceil(MAX_PDF_BYTES * 4/3)
 const MAX_BASE64_CHARS = Math.ceil(MAX_PDF_BYTES * (4 / 3));
@@ -181,6 +186,11 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
   const raw = body.data.base64.trim();
   const normalizedBase64 = raw.includes(",") ? (raw.split(",")[1] ?? "") : raw;
 
+  if (!normalizedBase64 || normalizedBase64.trim().length === 0) {
+    res.status(400).json({ error: "PDF data is empty. Please try uploading the file again." });
+    return;
+  }
+
   let pdfBuffer: Buffer;
   try {
     pdfBuffer = Buffer.from(normalizedBase64, "base64");
@@ -188,6 +198,11 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
     res.status(400).json({
       error: "Invalid base64 data. Please try uploading the file again.",
     });
+    return;
+  }
+
+  if (pdfBuffer.byteLength === 0) {
+    res.status(400).json({ error: "PDF data decoded to an empty buffer. Please try uploading the file again." });
     return;
   }
 
@@ -232,15 +247,8 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
     return;
   }
 
-  // Text quality guard — reject image-only / scanned PDFs
+  // Text quality guard — return a structured fallback for image-only/scanned PDFs.
   const text = (parseResult.text ?? "").trim();
-  if (text.length < MIN_TEXT_CHARS) {
-    res.status(400).json({
-      error: SCANNED_PDF_MESSAGE,
-    });
-    return;
-  }
-
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const structuredDocument: StructuredPdfDocument = buildStructuredPdfDocument({
     pageTexts,
@@ -252,9 +260,17 @@ router.post("/pdf/parse", async (req, res): Promise<void> => {
     warnings: structuredDocument.diagnostics.warnings,
   };
 
-  if (structuredDocument.diagnostics.text_quality === "fallback_required") {
-    res.status(400).json({
-      error: SCANNED_PDF_MESSAGE,
+  if (
+    text.length < MIN_TEXT_CHARS ||
+    structuredDocument.diagnostics.fallback_required
+  ) {
+    res.json({
+      text,
+      pageCount: parseResult.numpages,
+      wordCount,
+      charCount: text.length,
+      fallback_required: true,
+      message: SCANNED_PDF_MESSAGE,
       diagnostics,
       structuredDocument,
     });

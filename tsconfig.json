@@ -16,6 +16,9 @@
       "path": "./lib/domain-classifier"
     },
     {
+      "path": "./lib/cheme-brain"
+    },
+    {
       "path": "./lib/replit-auth-web"
     }
   ]

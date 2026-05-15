@@ -14,5 +14,7 @@ export interface SourceDocument {
   /** @nullable */
   filename: string | null;
   content: string;
+  /** @nullable */
+  structuredDocument: { [key: string]: unknown } | null;
   createdAt: Date;
 }

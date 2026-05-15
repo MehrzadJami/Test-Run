@@ -13,4 +13,6 @@ export const PatchVariableInputRole = {
   state: "state",
   input: "input",
   output: "output",
+  parameter: "parameter",
+  control: "control",
 } as const;

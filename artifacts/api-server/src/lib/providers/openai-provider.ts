@@ -1,6 +1,11 @@
 import OpenAI from "openai";
 import type { ExtractionProvider, ProviderName } from "../extractor";
+import {
+  buildPaperUnderstandingPrompt,
+  type PaperUnderstandingDocumentChunk,
+} from "../paper-understanding-prompt";
 import { EXTRACTION_SYSTEM_PROMPT, buildUserMessage } from "./prompt";
+import { parsePaperUnderstandingResponse } from "./paper-understanding-response";
 
 // Singleton — one client per process lifetime; key read at call time, not module
 // load time, so tests / env changes don't require a restart.
@@ -76,6 +81,52 @@ export class OpenAIProvider implements ExtractionProvider {
       // systemPrompt contains only instructional text — NO API keys.
       providerModel: this.model,
       systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+    };
+  }
+
+  async extractFromChunks(documentChunks: PaperUnderstandingDocumentChunk[]): Promise<{
+    raw: unknown;
+    tokenMeta: OpenAITokenMeta | null;
+    providerModel: string;
+    systemPrompt: string;
+    rawProviderResponse: unknown;
+  }> {
+    const prompt = buildPaperUnderstandingPrompt(documentChunks);
+    const client = new OpenAI({
+      apiKey: this.apiKey ?? process.env["OPENAI_API_KEY"],
+    });
+
+    const response = await client.chat.completions.create({
+      model: this.model,
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: prompt.systemPrompt },
+        { role: "user", content: prompt.userPrompt },
+      ],
+    });
+
+    const content = response.choices[0]?.message?.content ?? "";
+    let tokenMeta: OpenAITokenMeta | null = null;
+    if (response.usage) {
+      const pt = response.usage.prompt_tokens;
+      const ct = response.usage.completion_tokens;
+      tokenMeta = {
+        promptTokens: pt,
+        completionTokens: ct,
+        totalTokens: response.usage.total_tokens,
+        estimatedCostUsd:
+          pt * INPUT_PRICE_PER_TOKEN + ct * OUTPUT_PRICE_PER_TOKEN,
+      };
+    }
+
+    const parsed = parsePaperUnderstandingResponse(content);
+    return {
+      raw: parsed.raw,
+      rawProviderResponse: parsed.rawProviderResponse,
+      tokenMeta,
+      providerModel: this.model,
+      systemPrompt: prompt.systemPrompt,
     };
   }
 }
